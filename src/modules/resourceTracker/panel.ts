@@ -38,6 +38,13 @@ import OBR, { Item } from "@owlbear-rodeo/sdk";
 import { Resource, IconId, PLUGIN_ID } from "./types";
 import { ICON_LIBRARY } from "./icons";
 import { readResources, updateResource, writeResources } from "./storage";
+import { t } from "../../i18n";
+import { getLocalLang } from "../../state";
+
+// Shared component (mounted in the resource-tracker DM panel AND in the
+// player-facing cc-info card), so read the language fresh on each call
+// — the host re-renders on data change and on language switch.
+const T = (k: Parameters<typeof t>[1]) => t(getLocalLang(), k);
 
 // 2026-05-14 — small expression parser for click-to-input on bar /
 // number rows. Accepts:
@@ -210,7 +217,7 @@ export function mountResourcePanel(opts: MountOptions): {
   async function refresh(): Promise<void> {
     const id = getItemId();
     if (!id) {
-      container.innerHTML = `<div class="rt-empty">未选中任何 token</div>`;
+      container.innerHTML = `<div class="rt-empty">${T("rpNoToken")}</div>`;
       currentRender = [];
       lastSnapshotJson = "";
       return;
@@ -315,14 +322,14 @@ export function mountResourcePanel(opts: MountOptions): {
   function render(): void {
     const id = getItemId();
     if (!id) {
-      container.innerHTML = `<div class="rt-empty">未选中任何 token</div>`;
+      container.innerHTML = `<div class="rt-empty">${T("rpNoToken")}</div>`;
       return;
     }
     if (currentRender.length === 0) {
       container.innerHTML = `
         <div class="rt-empty-state">
-          <div class="rt-empty-msg">该 token 还没有任何资源</div>
-          <button class="rt-add-first" type="button">＋ 创建资源</button>
+          <div class="rt-empty-msg">${T("rpNoResources")}</div>
+          <button class="rt-add-first" type="button">${T("rpCreate")}</button>
         </div>
       `;
       container.querySelector<HTMLButtonElement>(".rt-add-first")
@@ -336,7 +343,7 @@ export function mountResourcePanel(opts: MountOptions): {
     });
     container.innerHTML = `
       <div class="rt-list">${sorted.map(renderResourceRow).join("")}</div>
-      <button class="rt-add" type="button">＋ 新增资源</button>
+      <button class="rt-add" type="button">${T("rpAdd")}</button>
     `;
     bindRowEvents();
   }
@@ -370,10 +377,10 @@ export function mountResourcePanel(opts: MountOptions): {
                 data-action="row-grip"
                 data-rid="${escapeAttr(r.id)}"
                 draggable="true"
-                title="拖动以重新排序">≡</span>
-          <div class="rt-row-name" title="${escapeAttr(r.name)}">${escapeHtml(r.name || "(未命名)")}</div>
+                title="${escapeAttr(T("rpReorder"))}">≡</span>
+          <div class="rt-row-name" title="${escapeAttr(r.name)}">${escapeHtml(r.name || T("rtUnnamed"))}</div>
           <div class="rt-row-meta" data-meta>${r.current} / ${r.max}</div>
-          <button class="rt-row-edit" type="button" data-edit-id="${escapeAttr(r.id)}" title="编辑">⚙</button>
+          <button class="rt-row-edit" type="button" data-edit-id="${escapeAttr(r.id)}" title="${escapeAttr(T("rpEdit"))}">⚙</button>
         </div>
         <div class="rt-pills">${pillsHtml}</div>
       </div>
@@ -391,13 +398,13 @@ export function mountResourcePanel(opts: MountOptions): {
               data-action="count-toggle"
               data-rid="${escapeAttr(r.id)}"
               data-pos="${i}"
-              title="${escapeAttr(r.name)} · 第 ${i} 格 · 点击赋值 ${i}（已为 ${i} 时减 1）· 右键归满">
+              title="${escapeAttr(T("rpPipTitle").replace("{name}", r.name).replace(/\{i\}/g, String(i)))}">
           ${ICON_LIBRARY[r.icon as IconId] ?? ICON_LIBRARY.gem}
         </span>
       `);
     }
     if (max === 0) {
-      cells.push(`<span class="rt-pill-empty">最大值为 0（点 ⚙ 设置）</span>`);
+      cells.push(`<span class="rt-pill-empty">${T("rpMaxZero")}</span>`);
     }
     return cells.join("");
   }
@@ -419,11 +426,11 @@ export function mountResourcePanel(opts: MountOptions): {
            data-bar-num
            data-action="value-edit"
            data-rid="${escapeAttr(r.id)}"
-           title="点击编辑：可输入数字 / +5 -3 / current+5 / max-2 等表达式">${cur} / ${max}</div>
+           title="${escapeAttr(T("rpEditExpr"))}">${cur} / ${max}</div>
       <div class="rt-bar"
            data-action="bar-drag"
            data-rid="${escapeAttr(r.id)}"
-           title="${escapeAttr(r.name)} · 左键拖动设置进度，右键 +1 / 归满">
+           title="${escapeAttr(T("rpBarTitle").replace("{name}", r.name))}">
         <div class="rt-bar-fill" data-bar-fill style="width:${ratio.toFixed(1)}%"></div>
         <span class="rt-bar-thumb"
               data-bar-thumb
@@ -449,7 +456,7 @@ export function mountResourcePanel(opts: MountOptions): {
     const cur = r.current;
     return `
       <div class="rt-num-bar">
-        <button class="rt-num-end" data-num-end="min" type="button" title="跳到最小（${min}）">${min}</button>
+        <button class="rt-num-end" data-num-end="min" type="button" title="${escapeAttr(T("rpJumpMin").replace("{min}", String(min)))}">${min}</button>
         <button class="rt-num-step rt-num-minus"
                 data-action="num-step"
                 data-rid="${escapeAttr(r.id)}"
@@ -464,7 +471,7 @@ export function mountResourcePanel(opts: MountOptions): {
                 data-num-val
                 data-action="value-edit"
                 data-rid="${escapeAttr(r.id)}"
-                title="点击编辑：可输入数字 / +5 -3 / current+5 / max-2 等表达式">${cur}</span>
+                title="${escapeAttr(T("rpEditExpr"))}">${cur}</span>
         </span>
         <button class="rt-num-step rt-num-plus"
                 data-action="num-step"
@@ -472,7 +479,7 @@ export function mountResourcePanel(opts: MountOptions): {
                 data-dir="+1"
                 type="button"
                 title="${escapeAttr(r.name)} +1">+</button>
-        <button class="rt-num-end" data-num-end="max" type="button" title="跳到最大（${max}）">${max}</button>
+        <button class="rt-num-end" data-num-end="max" type="button" title="${escapeAttr(T("rpJumpMax").replace("{max}", String(max)))}">${max}</button>
       </div>
     `;
   }
@@ -745,7 +752,7 @@ export function mountResourcePanel(opts: MountOptions): {
           // Open suppress-render window for the metadata echo.
           suppressRenderUntil = Date.now() + SUPPRESS_RENDER_MS;
           firePulse(el);
-          onChange?.({ resourceName: r.name || "(未命名)", delta: lastApplied - startCurrent, current: lastApplied, max: r.max });
+          onChange?.({ resourceName: r.name || T("rtUnnamed"), delta: lastApplied - startCurrent, current: lastApplied, max: r.max });
           void broadcastChanged(itemId, final, lastApplied - startCurrent, startCurrent);
           void updateResource(itemId, r.id, () => final);
         }
@@ -941,7 +948,7 @@ export function mountResourcePanel(opts: MountOptions): {
     // 2. Patch DOM in place + run pulse animation. No re-render.
     patchRow(nextRow, pulseEl);
     // 3. Notifier hook + room-wide toast broadcast.
-    onChange?.({ resourceName: r.name || "(未命名)", delta, current: next, max: r.max });
+    onChange?.({ resourceName: r.name || T("rtUnnamed"), delta, current: next, max: r.max });
     void broadcastChanged(itemId, nextRow, delta, r.current);
     // 4. Persist. items.onChange echoes back; refresh() runs but
     //    skips render() because we're in the suppress window.

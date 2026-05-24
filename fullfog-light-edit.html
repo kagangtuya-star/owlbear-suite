@@ -38,37 +38,37 @@
     </style>
   </head>
   <body>
-    <h2 id="title">光源设置</h2>
+    <h2 id="title" data-en="Light settings">光源设置</h2>
 
     <div class="row">
       <label class="lbl">
-        <span>光照半径（格）</span>
-        <span class="val" id="radius-val">6 格</span>
+        <span data-en="Light radius (cells)">光照半径（格）</span>
+        <span class="val" id="radius-val" data-en="6 cells">6 格</span>
       </label>
       <input type="range" id="radius" min="0.5" max="24" step="0.5" value="6" />
-      <div class="desc">每格按当前网格 dpi 换算。6 格 ≈ 30 尺火把光照范围。</div>
+      <div class="desc" data-en="Each cell converts by the current grid dpi. 6 cells ≈ a 30 ft torch's light range.">每格按当前网格 dpi 换算。6 格 ≈ 30 尺火把光照范围。</div>
     </div>
 
     <div class="row">
       <label class="lbl">
-        <span>核心半径（px）</span>
+        <span data-en="Core radius (px)">核心半径（px）</span>
         <span class="val" id="source-val">25 px</span>
       </label>
       <input type="range" id="source" min="5" max="120" step="1" value="25" />
-      <div class="desc">中心保持全亮的小圆半径。值小一些（25 左右）才能从 5 尺门洞中通过。</div>
+      <div class="desc" data-en="Radius of the fully-lit center circle. Keep it small (~25) so light can pass through a 5 ft doorway.">中心保持全亮的小圆半径。值小一些（25 左右）才能从 5 尺门洞中通过。</div>
     </div>
 
     <div class="row">
       <label class="lbl">
-        <span>边缘衰减</span>
+        <span data-en="Edge falloff">边缘衰减</span>
         <span class="val" id="falloff-val">0.20</span>
       </label>
       <input type="range" id="falloff" min="0.05" max="2.0" step="0.05" value="0.2" />
-      <div class="desc">越大边缘越柔和；0.2 = 硬边火把，1.5 = 柔光月亮。</div>
+      <div class="desc" data-en="Higher = softer edge; 0.2 = hard-edged torch, 1.5 = soft moonlight.">越大边缘越柔和；0.2 = 硬边火把，1.5 = 柔光月亮。</div>
     </div>
 
     <div class="actions">
-      <button id="btn-remove" class="danger">移除光源</button>
+      <button id="btn-remove" class="danger" data-en="Remove light">移除光源</button>
     </div>
 
     <script type="module" src="/src/modules/fullFog/light/edit-page.ts"></script>

@@ -565,30 +565,42 @@ function render(d: any, cardId: string, roomId: string, live: BubblesData = {}) 
       const dmgExprMatch = /\d*d\d+([+-]\d+)?/.exec(dmgExprRaw);
       const dmgExpr = dmgExprMatch ? dmgExprMatch[0] : dmgExprRaw;
       const dmgLbl = `${wpName} 伤害${w.damage_type ? `(${w.damage_type})` : ""}`;
-      const dmgClickable = dmgExpr
-        ? `<span class="rollable" data-expr="${escapeHtml(dmgExpr)}" data-label="${escapeHtml(dmgLbl)}" title="${escapeHtml(dmgLbl)} ${escapeHtml(dmgExpr)}">${escapeHtml(dmgRaw || "?")}</span>`
-        : escapeHtml(dmgRaw || "?");
       // 附加伤害骰 — bonus dice (sneak attack, divine smite, etc.).
       // Server attaches `extra_damage` (e.g. "1d8") and
-      // `extra_damage_type` (e.g. "辐光"). Render as a separate
-      // clickable chunk after the base damage so different damage
-      // types don't get folded into the same expression.
-      let extraHtml = "";
-      const extraExpr = w.extra_damage
+      // `extra_damage_type` (e.g. "辐光").
+      //
+      // 2026-05-23 — merged into a SINGLE rollable button: clicking
+      // the damage now rolls `base + extra` in one go (e.g. 1d6+4+1d6),
+      // since the small character panel is a quick-action surface and
+      // splitting the click into two felt wrong. The displayed text
+      // still shows the extra portion separately (with its damage
+      // type) so the player can read what's contributing, but only
+      // one chip is clickable. (Note: when base + extra are different
+      // damage types, the combined roll is a sum — dice rolling
+      // doesn't carry per-die typing; the label still lists both
+      // types for the GM.)
+      const extraExprRaw = w.extra_damage
         ? String(w.extra_damage).replace(/\s+/g, "")
         : "";
-      if (extraExpr) {
-        const extraLbl = `${wpName} 附加伤害${w.extra_damage_type ? `(${w.extra_damage_type})` : ""}`;
-        const extraDisplay = [w.extra_damage, w.extra_damage_type]
-          .filter(Boolean)
-          .join(" ");
-        extraHtml =
-          ` <span class="dmg-extra rollable" data-expr="${escapeHtml(extraExpr)}" data-label="${escapeHtml(extraLbl)}" title="${escapeHtml(extraLbl)} ${escapeHtml(extraExpr)}">+${escapeHtml(extraDisplay)}</span>`;
-      }
+      const combinedExpr = dmgExpr && extraExprRaw
+        ? `${dmgExpr}+${extraExprRaw}`
+        : dmgExpr || extraExprRaw;
+      const combinedLbl = extraExprRaw
+        ? `${wpName} 伤害${w.damage_type ? `(${w.damage_type})` : ""}${w.extra_damage_type ? ` + ${w.extra_damage_type}` : " + 附加"}`
+        : dmgLbl;
+      const extraDisplay = extraExprRaw
+        ? [w.extra_damage, w.extra_damage_type].filter(Boolean).join(" ")
+        : "";
+      const extraSuffix = extraExprRaw
+        ? ` <span class="dmg-extra-label">+${escapeHtml(extraDisplay)}</span>`
+        : "";
+      const dmgClickable = combinedExpr
+        ? `<span class="rollable" data-expr="${escapeHtml(combinedExpr)}" data-label="${escapeHtml(combinedLbl)}" title="${escapeHtml(combinedLbl)} ${escapeHtml(combinedExpr)}">${escapeHtml(dmgRaw || "?")}${extraSuffix}</span>`
+        : escapeHtml(dmgRaw || "?");
       weaponRows.push(`<div class="wp">
         <span class="n">${escapeHtml(wpName)}</span>
         <span class="atk rollable" data-expr="${atkExpr}" data-label="${escapeHtml(atkLbl)}" title="${escapeHtml(atkLbl)} ${atkExpr}">${escapeHtml(w.attack_bonus ?? "?")}</span>
-        <span class="dmg">${dmgClickable}${extraHtml}</span>
+        <span class="dmg">${dmgClickable}</span>
         ${prop}
       </div>`);
     }

@@ -28,10 +28,24 @@ import {
   BuffDef,
   textColorFor,
 } from "./modules/statusTracker/types";
+import { t, applyI18nDom } from "./i18n";
+import { getLocalLang } from "./state";
+
+// Read the active language fresh on each render. This popover is
+// short-lived (opens on a token, closes on drop), so a live language
+// switch mid-open is a non-case; reading at render time suffices.
+const T = (k: Parameters<typeof t>[1]) => t(getLocalLang(), k);
 
 const BC_DRAG_START = `${PLUGIN_ID}/drag-start`;
 const BC_CLOSE_MANAGE = `${PLUGIN_ID}/close-manage`;
 const POPOVER_ID = `${PLUGIN_ID}/manage`;
+// Per-browser palette catalog (custom + effect buffs the user added
+// locally). Same key status-tracker-page.ts writes. The manage popover
+// MUST consult it too — otherwise a custom / effect buff that lives
+// only in this browser's localStorage (never written to the shared
+// scene catalog) can't be resolved here and the applied buff is
+// silently dropped → invisible → impossible to remove.
+const LS_BUFF_CATALOG = "obr-suite/status/buff-catalog";
 
 const params = new URLSearchParams(location.search);
 const tokenId = params.get("token") ?? "";
@@ -43,7 +57,7 @@ const btnClose = document.getElementById("btnClose") as HTMLButtonElement;
 let catalog: BuffDef[] = [];
 let myBuffIds: string[] = [];
 let myBuffRounds: Record<string, number> = {};
-let tokenName = "角色";
+let tokenName = T("stRoleFallback");
 
 // 2026-05-15 — strip pictographic emoji from buff names so the manage
 // popover stays text-only (matches the palette + capture sweep). The
@@ -63,39 +77,48 @@ function escapeHtml(s: string): string {
   );
 }
 
+function parseCatalogArray(v: unknown): BuffDef[] {
+  let arr: any[] | null = null;
+  if (Array.isArray(v)) arr = v;
+  else if (v && typeof v === "object" && Array.isArray((v as any).buffs)) {
+    arr = (v as any).buffs;
+  }
+  if (!arr) return [];
+  return arr
+    .filter((e) => e && typeof e.id === "string")
+    .map((e) => {
+      const def: any = {
+        id: e.id,
+        name: String(e.name ?? e.id),
+        color: typeof e.color === "string" ? e.color : "#ffffff",
+        group: typeof e.group === "string" && e.group.length > 0 ? e.group : undefined,
+        rounds: Number.isFinite(Number(e.rounds)) && Number(e.rounds) > 0 ? Math.floor(Number(e.rounds)) : undefined,
+      };
+      // Preserve effect fields so an effect buff resolves with its real
+      // look (and so a transfer/remove drag carries the full def).
+      if (typeof e.webmAsset === "string") def.webmAsset = e.webmAsset;
+      if (typeof e.iconAsset === "string") def.iconAsset = e.iconAsset;
+      return def as BuffDef;
+    });
+}
+
 async function loadCatalog(): Promise<void> {
+  // Merge EVERY catalog source so the manage popover can resolve (and
+  // therefore let the user remove) any applied buff: built-in defaults,
+  // this browser's local palette (custom + effect buffs), and the
+  // shared scene catalog. Later sources override earlier ones by id —
+  // scene (shared truth) wins over local, which wins over default.
+  const byId = new Map<string, BuffDef>();
+  for (const b of DEFAULT_BUFFS) byId.set(b.id, b);
+  try {
+    const raw = localStorage.getItem(LS_BUFF_CATALOG);
+    if (raw) for (const b of parseCatalogArray(JSON.parse(raw))) byId.set(b.id, b);
+  } catch { /* private mode / malformed — skip local */ }
   try {
     const meta = await OBR.scene.getMetadata();
-    const v = meta[SCENE_BUFF_CATALOG_KEY] as unknown;
-    let arr: any[] | null = null;
-    if (Array.isArray(v)) arr = v;
-    else if (v && typeof v === "object" && Array.isArray((v as any).buffs)) {
-      arr = (v as any).buffs;
-    }
-    if (arr) {
-      const parsed = arr
-        .filter((e) => e && typeof e.id === "string")
-        .map((e) => ({
-          id: e.id,
-          name: String(e.name ?? e.id),
-          color: typeof e.color === "string" ? e.color : "#ffffff",
-          group: typeof e.group === "string" && e.group.length > 0 ? e.group : undefined,
-          rounds: Number.isFinite(Number(e.rounds)) && Number(e.rounds) > 0 ? Math.floor(Number(e.rounds)) : undefined,
-        } as BuffDef));
-      // 2026-05-05 bug fix: when the user has applied default-catalog
-      // buffs to tokens but never opened the palette's ✎ edit popup
-      // to save a custom catalog, scene metadata is empty and parsed
-      // ends up empty too. Falling back to DEFAULT_BUFFS lets the
-      // manage popover still resolve names + colours for those
-      // default ids. Previously it incorrectly rendered "no buffs on
-      // this token" even when the token clearly had them.
-      catalog = parsed.length > 0 ? parsed : DEFAULT_BUFFS.slice();
-    } else {
-      catalog = DEFAULT_BUFFS.slice();
-    }
-  } catch {
-    catalog = DEFAULT_BUFFS.slice();
-  }
+    for (const b of parseCatalogArray(meta[SCENE_BUFF_CATALOG_KEY])) byId.set(b.id, b);
+  } catch { /* offline — scene layer skipped */ }
+  catalog = [...byId.values()];
 }
 
 async function loadTokenState(): Promise<void> {
@@ -104,11 +127,11 @@ async function loadTokenState(): Promise<void> {
     const items = await OBR.scene.items.getItems([tokenId]);
     if (items.length === 0) {
       myBuffIds = [];
-      tokenName = "角色";
+      tokenName = T("stRoleFallback");
       return;
     }
     const tok = items[0];
-    tokenName = tok.name || "角色";
+    tokenName = tok.name || T("stRoleFallback");
     const ids = (tok.metadata as any)[STATUS_BUFFS_KEY];
     myBuffIds = Array.isArray(ids) ? ids.filter((x: any) => typeof x === "string") : [];
     const rounds = (tok.metadata as any)[STATUS_BUFF_ROUNDS_KEY];
@@ -125,25 +148,31 @@ async function loadTokenState(): Promise<void> {
   }
 }
 
+// Resolve an applied buff id to a def — falling back to a generic pill
+// for ids we still can't place (a custom / effect buff from another
+// client, or a stale id). The whole job of this popover is to REMOVE
+// buffs, so an unresolved id MUST still be shown + draggable, never
+// silently dropped (that was the "看不到自定义/特效 buff 没法删" bug).
+function resolveBuff(id: string): BuffDef {
+  const found = catalog.find((b) => b.id === id);
+  if (found) return found;
+  return { id, name: T("stUnknownBuff"), color: "#6b7280" } as BuffDef;
+}
+
 function render(): void {
   titleEl.textContent = `${tokenName} · buff`;
-  // Resolve buff IDs through the catalog. Drop ids whose entry is
-  // missing (they'd render as undefined; better to silently skip).
-  const myBuffs = myBuffIds
-    .map((id) => catalog.find((b) => b.id === id))
-    .filter((b): b is BuffDef => !!b);
-
-  if (myBuffs.length === 0) {
-    gridEl.innerHTML = `<div class="empty">该角色没有 buff</div>`;
+  if (myBuffIds.length === 0) {
+    gridEl.innerHTML = `<div class="empty">${T("stNoBuffsOnChar")}</div>`;
     return;
   }
 
-  gridEl.innerHTML = myBuffs.map((b) => {
+  gridEl.innerHTML = myBuffIds.map((id) => {
+    const b = resolveBuff(id);
     const fg = textColorFor(b.color);
-    const rounds = myBuffRounds[b.id];
+    const rounds = myBuffRounds[id];
     const cleanName = stripEmoji(b.name);
     const label = rounds > 0 ? `${cleanName} ${rounds}` : cleanName;
-    return `<div class="bubble" data-id="${escapeHtml(b.id)}"
+    return `<div class="bubble" data-id="${escapeHtml(id)}"
                  style="background:${escapeHtml(b.color)};color:${escapeHtml(fg)}">${escapeHtml(label)}</div>`;
   }).join("");
 
@@ -163,8 +192,11 @@ async function onBubblePointerDown(e: Event): Promise<void> {
   ev.stopPropagation();
   const el = ev.currentTarget as HTMLElement;
   const id = el.dataset.id ?? "";
-  const buff = catalog.find((b) => b.id === id);
-  if (!buff) return;
+  if (!id) return;
+  // Use the same fallback as render() so an unresolved buff is still
+  // draggable-to-remove (the capture overlay only needs buff.id to
+  // strip it off the source token).
+  const buff = resolveBuff(id);
   try {
     await OBR.broadcast.sendMessage(
       BC_DRAG_START,
@@ -201,6 +233,7 @@ window.addEventListener("keydown", async (e) => {
 });
 
 OBR.onReady(async () => {
+  applyI18nDom(getLocalLang());
   await loadCatalog();
   await loadTokenState();
   render();

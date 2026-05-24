@@ -36,6 +36,12 @@ html,body{
   margin-bottom:12px;
   flex-shrink:0;
 }
+.hdr .grip{
+  cursor:grab;color:var(--text-dim);font-size:13px;line-height:1;
+  padding:0 4px 0 0;user-select:none;touch-action:none;letter-spacing:-2px;
+}
+.hdr .grip:hover{color:var(--text)}
+.hdr .grip.is-dragging{cursor:grabbing;color:var(--accent)}
 .hdr .ic{font-size:14px;color:var(--accent)}
 .hdr .ttl{font-size:14px;font-weight:700;flex:1;letter-spacing:0.2px}
 .hdr .x{
@@ -203,6 +209,7 @@ html,body{
 <body>
 <div class="card">
   <div class="hdr">
+    <span class="grip" id="drag-handle" title="拖动面板" aria-label="拖动面板">⠿</span>
     <span class="ic">◐</span>
     <span class="ttl" id="title" data-i18n="portalTitle">传送门</span>
     <button class="x" id="x">×</button>

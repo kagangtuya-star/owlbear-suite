@@ -35,7 +35,8 @@ export type ModuleId =
   | "trickster"
   | "circleImage"
   | "follow"
-  | "musicBoard";
+  | "musicBoard"
+  | "transform";
 
 export type DataVersion = "2014" | "2024" | "all";
 export type Language = "zh" | "en";
@@ -202,10 +203,19 @@ export const DEFAULT_STATE: SuiteState = {
     // registered as a module in background.ts. modules/follow/ source
     // is kept on disk un-wired in case it's revived.
     follow: false,
-    // Music board — promoted to stable 2026-05-19. Background-resident
-    // engine plays audio + maintains the PeerJS connection across
-    // popover open/close, so all players hear synchronised audio.
-    musicBoard: true,
+    // Music board — RETIRED 2026-05-23 with project closure. The
+    // standalone web tool at obr.dnd.center/studio/music-studio/
+    // continues to work standalone; the in-plugin module (background-
+    // resident audio engine + PeerJS pairing + popover) is no longer
+    // wired into background.ts's modules registry, so this flag is
+    // hard-pinned OFF regardless of any stored room state. Settings
+    // entry remains and links to the studio website.
+    musicBoard: false,
+    // Transform (变身 / polymorph) — added 2026-05-20, dev-only while
+    // the scaffold (context menu + snapshot/revert + ad-hoc image swap)
+    // is being fleshed out into preset forms + two-stage effects +
+    // bestiary binding + camera focus.
+    transform: true,
   },
   dataVersion: "2024",
   allowPlayerMonsters: false,

@@ -34,6 +34,7 @@
 
 import OBR, { buildLight, type Item } from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../../asset-base";
+import { getLocalLang } from "../../../state";
 import {
   CTX_LIGHT_ADD,
   CTX_LIGHT_EDIT,
@@ -212,6 +213,7 @@ function scheduleSync(): void {
 
 export async function setupLight(): Promise<void> {
   if (registered) return;
+  const en = getLocalLang() === "en";
   try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
 
   if (role === "GM") {
@@ -221,7 +223,7 @@ export async function setupLight(): Promise<void> {
         icons: [
           {
             icon: ICON_URL,
-            label: "添加光源",
+            label: en ? "Add light" : "添加光源",
             filter: {
               every: [
                 { key: "type", value: "IMAGE" },
@@ -232,7 +234,7 @@ export async function setupLight(): Promise<void> {
           },
           {
             icon: ICON_URL,
-            label: "添加光源",
+            label: en ? "Add light" : "添加光源",
             filter: {
               every: [
                 { key: "type", value: "SHAPE" },
@@ -254,7 +256,7 @@ export async function setupLight(): Promise<void> {
         icons: [
           {
             icon: ICON_URL,
-            label: "光源设置",
+            label: en ? "Light settings" : "光源设置",
             filter: {
               every: [
                 { key: "type", value: "IMAGE" },
@@ -265,7 +267,7 @@ export async function setupLight(): Promise<void> {
           },
           {
             icon: ICON_URL,
-            label: "光源设置",
+            label: en ? "Light settings" : "光源设置",
             filter: {
               every: [
                 { key: "type", value: "SHAPE" },
@@ -285,7 +287,7 @@ export async function setupLight(): Promise<void> {
         id: CTX_LIGHT_REMOVE,
         icons: [{
           icon: ICON_URL,
-          label: "移除光源",
+          label: en ? "Remove light" : "移除光源",
           filter: {
             every: [
               { key: ["metadata", LIGHT_KEY], value: undefined, operator: "!=" },

@@ -6,6 +6,19 @@ import { subscribeToSfx } from "../dice/sfx-broadcast";
 import { patchBubbles } from "../../utils/statEdit";
 import { normalizeCombatGearFlags, readBooleanFlag } from "./data-normalize";
 import { reconcileUploadedCardShieldState } from "./xlsx-shield-state";
+import { t, type Language } from "../../i18n";
+import { getLocalLang, onLangChange } from "../../state";
+
+// i18n — this is a deeply nested Preact tree, so rather than thread a
+// `lang` prop through every section we keep a module-level `_lang` that
+// `T()` reads fresh. The root <App/> mirrors its `lang` state into
+// `_lang` at the top of each render (parent renders before children, so
+// children + module-level render helpers see the current value) and
+// re-renders the whole tree on a language flip via onLangChange.
+let _lang: Language = (() => {
+  try { return (getLocalLang() as Language) ?? "zh"; } catch { return "zh"; }
+})();
+const T = (k: Parameters<typeof t>[1]) => t(_lang, k);
 
 // Token-binding metadata key — must mirror modules/characterCards/index.ts
 // so we can locate every token in the scene that's bound to the
@@ -101,12 +114,20 @@ interface CharacterData {
 
 // ===== Const tables ==========================================
 const ABL_ORDER = ["str", "dex", "con", "int", "wis", "cha"] as const;
-const ABL_LABEL: Record<string, string> = {
+const ABL_LABEL_ZH: Record<string, string> = {
   str: "力量", dex: "敏捷", con: "体质", int: "智力", wis: "感知", cha: "魅力",
 };
-const ABL_ABBR: Record<string, string> = {
+const ABL_LABEL_EN: Record<string, string> = {
+  str: "Strength", dex: "Dexterity", con: "Constitution", int: "Intelligence", wis: "Wisdom", cha: "Charisma",
+};
+const ABL_ABBR_ZH: Record<string, string> = {
   str: "力", dex: "敏", con: "体", int: "智", wis: "感", cha: "魅",
 };
+const ABL_ABBR_EN: Record<string, string> = {
+  str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA",
+};
+const ablLabel = (k: string): string => (_lang === "en" ? ABL_LABEL_EN : ABL_LABEL_ZH)[k] ?? k;
+const ablAbbr = (k: string): string => (_lang === "en" ? ABL_ABBR_EN : ABL_ABBR_ZH)[k] ?? k;
 
 // 2026-05-14 (#14 follow-up) — tab structure reduced to 4 per user
 // request. 战斗 (CombatSection) and 装备 (InventorySection) now live
@@ -115,11 +136,11 @@ const ABL_ABBR: Record<string, string> = {
 // (法术 / 特性 / 背景) get their own dedicated tabs.
 type TabKey = "overview" | "spells" | "features" | "background";
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: "overview",   label: "概览" },
-  { key: "spells",     label: "法术" },
-  { key: "features",   label: "特性" },
-  { key: "background", label: "背景" },
+const TABS: { key: TabKey; labelKey: Parameters<typeof t>[1] }[] = [
+  { key: "overview",   labelKey: "ccTabOverview" },
+  { key: "spells",     labelKey: "ccTabSpells" },
+  { key: "features",   labelKey: "ccTabFeatures" },
+  { key: "background", labelKey: "ccTabBackground" },
 ];
 
 // ===== Helpers ===============================================
@@ -312,7 +333,7 @@ function Header({
 }) {
   const id = data.identity || {};
   const cs = data.core_stats || {};
-  const name = id.display_name || id.character_name || "未命名";
+  const name = id.display_name || id.character_name || T("ccUnnamed");
   const englishName = id.character_name && id.display_name && id.character_name !== id.display_name
     ? id.character_name : null;
 
@@ -334,10 +355,10 @@ function Header({
         <div class="cc-head-meta">
           <span class="pip"><b>{race}</b></span>
           <span class="pip"><b>{cls}</b></span>
-          <span class="pip">总等级 <b>{totalLv}</b></span>
-          {id.alignment && <span class="pip">阵营 <b>{id.alignment}</b></span>}
-          {cs.size && <span class="pip">体型 <b>{cs.size}</b></span>}
-          {id.faith && <span class="pip">信仰 <b>{id.faith}</b></span>}
+          <span class="pip">{T("ccTotalLevel")} <b>{totalLv}</b></span>
+          {id.alignment && <span class="pip">{T("ccAlignment")} <b>{id.alignment}</b></span>}
+          {cs.size && <span class="pip">{T("ccSize")} <b>{cs.size}</b></span>}
+          {id.faith && <span class="pip">{T("ccFaith")} <b>{id.faith}</b></span>}
         </div>
       </div>
       <div class="cc-head-right">
@@ -349,10 +370,8 @@ function Header({
         <button
           class={`cc-btn ${editing ? "primary" : ""}`}
           onClick={onToggleEditing}
-          title={editing
-            ? "退出编辑模式（再次切换回只读视图）"
-            : "进入编辑模式：自由修改属性、添加词条、法术、特性、装备、背景"}>
-          <span class="ic">{editing ? "✎" : "🔧"}</span>{editing ? "编辑中" : "编辑"}
+          title={editing ? T("ccEditTitleOn") : T("ccEditTitleOff")}>
+          <span class="ic">{editing ? "✎" : "🔧"}</span>{editing ? T("ccEditingLabel") : T("ccEditLabel")}
         </button>
         {/* Save button — only visible in edit mode. Persists the
             current local data to the server via the same PUT endpoint
@@ -363,31 +382,31 @@ function Header({
             class="cc-btn primary"
             onClick={onSaveEdits}
             disabled={savingEdits}
-            title="把当前所有改动保存到服务器（不退出编辑模式）">
-            <span class="ic">💾</span>{savingEdits ? "保存中…" : "保存"}
+            title={T("ccSaveTitle")}>
+            <span class="ic">💾</span>{savingEdits ? T("ccSaving") : T("ccSaveBtn")}
           </button>
         )}
-        <button class="cc-btn" onClick={onRefresh} title="重新拉取服务器上的最新数据">
-          刷新
+        <button class="cc-btn" onClick={onRefresh} title={T("ccRefreshTitle")}>
+          {T("ccRefresh")}
         </button>
         {/* 2026-05-14 (#14 f2) — 导出 JSON + 仅复制 fused into one
             button group. 复制 is now a borderless icon-only sub-button
             seamlessly joined to the right edge of 导出 JSON (shared
             border, no gap). SVG icon, no emoji / text. */}
         <div class="cc-btn-group">
-          <button class="cc-btn" onClick={onExport} title="把当前角色卡数据导出为 JSON 文件">
-            导出 JSON
+          <button class="cc-btn" onClick={onExport} title={T("ccExportTitle")}>
+            {T("ccExportJson")}
           </button>
-          <button class="cc-btn cc-btn-sub" onClick={onCopyJson} title="仅复制：把当前角色卡 JSON 复制到剪贴板（不下载文件）">
+          <button class="cc-btn cc-btn-sub" onClick={onCopyJson} title={T("ccCopyTitle")}>
             <span class="ic" dangerouslySetInnerHTML={{ __html: ICON_COPY }} />
           </button>
         </div>
         {/* 导入 JSON + 仅粘贴 fused the same way. */}
         <div class="cc-btn-group">
-          <button class="cc-btn" onClick={onImport} title="从 JSON 文件加载角色卡">
-            导入 JSON
+          <button class="cc-btn" onClick={onImport} title={T("ccImportTitle")}>
+            {T("ccImportJson")}
           </button>
-          <button class="cc-btn cc-btn-sub" onClick={onPasteJson} title="仅粘贴：弹窗输入 JSON 文本，识别后应用为当前角色卡数据">
+          <button class="cc-btn cc-btn-sub" onClick={onPasteJson} title={T("ccPasteTitle")}>
             <span class="ic" dangerouslySetInnerHTML={{ __html: ICON_PASTE }} />
           </button>
         </div>
@@ -417,7 +436,7 @@ function PasteJsonModal({
   const submit = useCallback(async () => {
     if (busy) return;
     if (!text.trim()) {
-      setStatus("✕ 文本框为空，请粘贴角色卡 JSON");
+      setStatus(T("ccPasteEmpty"));
       return;
     }
     setBusy(true);
@@ -478,14 +497,14 @@ function PasteJsonModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: "10px", justifyContent: "space-between" }}>
-          <h3 style={{ margin: 0, fontSize: "15px", color: "var(--gold, #d4a056)" }}>粘贴角色卡 JSON</h3>
-          <span style={{ fontSize: "11px", color: "var(--ink-dim, #8a8479)" }}>Ctrl+Enter 应用 · Esc 取消</span>
+          <h3 style={{ margin: 0, fontSize: "15px", color: "var(--gold, #d4a056)" }}>{T("ccPasteModalTitle")}</h3>
+          <span style={{ fontSize: "11px", color: "var(--ink-dim, #8a8479)" }}>{T("ccPasteKbdHint")}</span>
         </div>
         <textarea
           autofocus
           value={text}
           onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
-          placeholder='直接粘贴 JSON 文本，例如 {"identity": {...}, "abilities": {...}, "core_stats": {...}}'
+          placeholder={T("ccPastePlaceholder")}
           spellcheck={false}
           style={{
             flex: "1 1 auto",
@@ -518,10 +537,10 @@ function PasteJsonModal({
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
           <button class="cc-btn" onClick={onCancel} disabled={busy}>
-            取消
+            {T("ccCancel")}
           </button>
           <button class="cc-btn primary" onClick={submit} disabled={busy || !text.trim()}>
-            {busy ? "应用中…" : "应用"}
+            {busy ? T("ccApplying") : T("ccApply")}
           </button>
         </div>
       </div>
@@ -585,13 +604,13 @@ function SpellPickModal({
       <div class="cc-modal" onClick={(e) => e.stopPropagation()}>
         <div class="cc-modal-h">
           <h3>{title}</h3>
-          <span class="cc-modal-hint">输入中文 / 英文名筛选 · Esc 取消</span>
+          <span class="cc-modal-hint">{T("ccSpellModalHint")}</span>
         </div>
         <input
           class="cc-edit-text"
           autofocus
           style={{ width: "100%", marginBottom: "8px", padding: "7px 10px", fontSize: "13px" }}
-          placeholder="法术名（中 / 英，留空浏览全部）"
+          placeholder={T("ccSpellSearchPh")}
           value={query}
           onInput={(e: any) => setQuery(e.target.value)}
         />
@@ -600,12 +619,12 @@ function SpellPickModal({
             <button
               class="cc-modal-row cc-modal-row-free"
               onClick={() => onPick(query.trim())}>
-              ＋ 直接添加「{query.trim()}」
+              {T("ccSpellAddFree").replace("{q}", query.trim())}
             </button>
           )}
-          {loading && <div class="cc-modal-msg">加载法术库…</div>}
+          {loading && <div class="cc-modal-msg">{T("ccSpellLoading")}</div>}
           {loadError && (
-            <div class="cc-modal-msg">法术库加载失败 — 上方"直接添加"仍可用</div>
+            <div class="cc-modal-msg">{T("ccSpellLoadErr")}</div>
           )}
           {!loading && matches.map((s) => (
             <button class="cc-modal-row" onClick={() => onPick(s.label)}>
@@ -616,11 +635,11 @@ function SpellPickModal({
             </button>
           ))}
           {!loading && !loadError && matches.length === 0 && query.trim() && (
-            <div class="cc-modal-msg">库内没有匹配项 — 可用上方"直接添加"</div>
+            <div class="cc-modal-msg">{T("ccSpellNoMatch")}</div>
           )}
         </div>
         <div class="cc-modal-foot">
-          <button class="cc-btn" onClick={onCancel}>取消</button>
+          <button class="cc-btn" onClick={onCancel}>{T("ccCancel")}</button>
         </div>
       </div>
     </div>
@@ -675,7 +694,7 @@ function StatsBanner({
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">临时</div>
+        <div class="stat-cell-label">{T("ccTemp")}</div>
         <div class="stat-cell-val">
           <input class="stat-input big"
             value={hp.temp ?? 0}
@@ -691,7 +710,7 @@ function StatsBanner({
         </div>
       </div>
       <div class="stat-cell init">
-        <div class="stat-cell-label">先攻</div>
+        <div class="stat-cell-label">{T("ccInit")}</div>
         <div class="stat-cell-val">
           {editing ? (
             <input class="stat-input big" type="number"
@@ -706,7 +725,7 @@ function StatsBanner({
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">速度</div>
+        <div class="stat-cell-label">{T("ccSpeed")}</div>
         <div class="stat-cell-val">
           {editing ? (
             <input class="stat-input big" type="number"
@@ -718,11 +737,11 @@ function StatsBanner({
           ) : (
             <span class="big">{cs.speed ?? "?"}</span>
           )}
-          <span class="unit">尺</span>
+          <span class="unit">{T("ccFtUnit")}</span>
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">被察</div>
+        <div class="stat-cell-label">{T("ccPassivePerc")}</div>
         <div class="stat-cell-val">
           {editing ? (
             <input class="stat-input big" type="number"
@@ -737,7 +756,7 @@ function StatsBanner({
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">熟练</div>
+        <div class="stat-cell-label">{T("ccProf")}</div>
         <div class="stat-cell-val">
           {editing ? (
             <input class="stat-input big" type="number"
@@ -752,7 +771,7 @@ function StatsBanner({
         </div>
       </div>
       <div class="stat-cell">
-        <div class="stat-cell-label">生命骰</div>
+        <div class="stat-cell-label">{T("ccHitDice")}</div>
         <div class="stat-cell-val">
           <input class="stat-input big" value={hd.current ?? 0}
             onChange={(e: any) => setHdCur(e.target.value)} />
@@ -880,7 +899,7 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">属性 · 豁免 · 技能{editing ? "（编辑中 — 点击 ●/○/★ 切换熟练）" : ""}</span>
+        <span class="sec-h-title">{T("ccSecAbilities")}{editing ? T("ccSecAbilitiesEditHint") : ""}</span>
       </div>
       <div class="sec-body">
         <div class="abl-grid">
@@ -896,14 +915,14 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
             if (editing) {
               return (
                 <div class="abl">
-                  <div class="abl-name">{ABL_LABEL[k]}</div>
+                  <div class="abl-name">{ablLabel(k)}</div>
                   <input class="abl-total cc-edit-num" type="number"
                     value={a.total ?? 10}
                     onInput={(e: any) => {
                       const n = parseInt(e.target.value, 10);
                       if (Number.isFinite(n)) setAbilityScore(k, n);
                     }} />
-                  <div class="abl-mod" title="自动从属性值推算">{fmtMod(a.modifier)}</div>
+                  <div class="abl-mod" title={T("ccTipAutoMod")}>{fmtMod(a.modifier)}</div>
                   {/* 2026-05-14 (#14 f2) — `abl-save-edit` is a DISTINCT
                       class from `abl-save`, so the CSS ::before that
                       auto-draws a ●/○ on `.abl-save` never fires here.
@@ -915,7 +934,7 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
                   <div class={`abl-save-edit ${a.save?.proficient ? "is-prof" : ""}`}>
                     <span class="abl-save-dot"
                           onClick={() => toggleSaveProf(k)}
-                          title="点击切换豁免熟练">{a.save?.proficient ? "●" : "○"}</span>
+                          title={T("ccTipToggleSaveProf")}>{a.save?.proficient ? "●" : "○"}</span>
                     <input class="cc-edit-num" type="number"
                       style={{ width: "44px" }}
                       value={a.save?.bonus ?? saveBonus}
@@ -929,18 +948,18 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
             }
             return (
               <div class="abl">
-                <div class="abl-name">{ABL_LABEL[k]}</div>
+                <div class="abl-name">{ablLabel(k)}</div>
                 <div class="abl-total">{a.total ?? "?"}</div>
                 <div class="abl-mod"
-                  onClick={() => rollExpr(`${ABL_LABEL[k]}检定`, aExpr)}
-                  onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${ABL_LABEL[k]}检定（优势）`, aExpr, "adv"); }}
-                  title={`${ABL_LABEL[k]}检定 ${aExpr}\n（左键投，右键优势）`}>
+                  onClick={() => rollExpr(`${ablLabel(k)}${T("ccCheckSuffix")}`, aExpr)}
+                  onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${ablLabel(k)}${T("ccCheckAdvSuffix")}`, aExpr, "adv"); }}
+                  title={`${ablLabel(k)}${T("ccCheckSuffix")} ${aExpr}\n${T("ccRollHint")}`}>
                   {fmtMod(a.modifier)}
                 </div>
                 <div class={`abl-save ${a.save?.proficient ? "is-prof" : ""}`}
-                  onClick={() => rollExpr(`${ABL_LABEL[k]}豁免`, sExpr)}
-                  title={`${ABL_LABEL[k]}豁免 ${sExpr}`}>
-                  豁免 <b>{fmtMod(saveBonus)}</b>
+                  onClick={() => rollExpr(`${ablLabel(k)}${T("ccSaveSuffix")}`, sExpr)}
+                  title={`${ablLabel(k)}${T("ccSaveSuffix")} ${sExpr}`}>
+                  {T("ccSave")} <b>{fmtMod(saveBonus)}</b>
                 </div>
               </div>
             );
@@ -962,11 +981,11 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
                       <span class="sk-prof"
                             style={{ cursor: "pointer" }}
                             onClick={() => cycleSkillProf(idx)}
-                            title="点击循环切换：无 → 熟练 → 专精 → 无">
+                            title={T("ccTipCycleSkillProf")}>
                         {cls === "exp" ? "★" : cls === "prof" ? "●" : "○"}
                       </span>
                       <span class="sk-name">{s.name}</span>
-                      <span class="sk-abil">{ABL_ABBR[s.ability] || ""}</span>
+                      <span class="sk-abil">{ablAbbr(s.ability) || ""}</span>
                       <input class="cc-edit-num sk-val" type="number"
                         style={{ width: "48px" }}
                         value={s.total ?? 0}
@@ -979,12 +998,12 @@ function AbilitiesAndSkills({ data }: { data: CharacterData }) {
                 }
                 return (
                   <div class={`sk ${cls}`}
-                    onClick={() => rollExpr(`${s.name}检定`, expr)}
-                    onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${s.name}检定（优势）`, expr, "adv"); }}
-                    title={`${s.name}检定 ${expr}\n（左键投，右键优势）`}>
+                    onClick={() => rollExpr(`${s.name}${T("ccCheckSuffix")}`, expr)}
+                    onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${s.name}${T("ccCheckAdvSuffix")}`, expr, "adv"); }}
+                    title={`${s.name}${T("ccCheckSuffix")} ${expr}\n${T("ccRollHint")}`}>
                     <span class="sk-prof">{cls === "exp" ? "★" : cls === "prof" ? "●" : "○"}</span>
                     <span class="sk-name">{s.name}</span>
-                    <span class="sk-abil">{ABL_ABBR[s.ability] || ""}</span>
+                    <span class="sk-abil">{ablAbbr(s.ability) || ""}</span>
                     <span class="sk-val">{fmtMod(s.total)}</span>
                   </div>
                 );
@@ -1012,7 +1031,7 @@ function Defenses({ data }: { data: CharacterData }) {
 
   // 2026-05-14 (#14) — small add/remove helpers per tag category.
   const addTag = (cat: "resistances" | "immunities" | "advantages" | "disadvantages") => {
-    const v = (window.prompt(`添加${labelOf(cat)}（用逗号分隔可一次添加多条）`, "") || "").trim();
+    const v = (window.prompt(`${T("ccAddPrefix")}${labelOf(cat)}${T("ccAddTagHint")}`, "") || "").trim();
     if (!v) return;
     const items = v.split(/[,，;；]/).map((s) => s.trim()).filter(Boolean);
     if (items.length === 0) return;
@@ -1024,7 +1043,7 @@ function Defenses({ data }: { data: CharacterData }) {
     onPatch({ defenses: { ...d, [cat]: cur.filter((x: string) => x !== value) } });
   };
   const addLangTool = (which: "languages" | "tool_proficiencies") => {
-    const v = (window.prompt(`添加${which === "languages" ? "语言" : "工具"}`, "") || "").trim();
+    const v = (window.prompt(`${T("ccAddPrefix")}${which === "languages" ? T("ccLanguages") : T("ccTools")}`, "") || "").trim();
     if (!v) return;
     const items = v.split(/[,，;；]/).map((s) => s.trim()).filter(Boolean);
     if (items.length === 0) return;
@@ -1036,7 +1055,7 @@ function Defenses({ data }: { data: CharacterData }) {
     onPatch({ identity: { ...id, [which]: cur.filter((x: string) => x !== value) } });
   };
   function labelOf(cat: string): string {
-    return { resistances: "抗性", immunities: "免疫", advantages: "优势", disadvantages: "劣势" }[cat] || cat;
+    return ({ resistances: T("ccResistances"), immunities: T("ccImmunities"), advantages: T("ccAdvantages"), disadvantages: T("ccDisadvantages") } as Record<string, string>)[cat] || cat;
   }
 
   const renderRow = (
@@ -1053,12 +1072,12 @@ function Defenses({ data }: { data: CharacterData }) {
           <span class={`def-tag ${css}`}>
             {x}
             {editing && (
-              <button class="cc-tag-x" onClick={() => removeTag(cat, x)} title="移除">×</button>
+              <button class="cc-tag-x" onClick={() => removeTag(cat, x)} title={T("ccRemove")}>×</button>
             )}
           </span>
         ))}
         {editing && (
-          <button class="cc-add-tag" onClick={() => addTag(cat)} title={`添加${label}`}>+</button>
+          <button class="cc-add-tag" onClick={() => addTag(cat)} title={`${T("ccAddPrefix")}${label}`}>+</button>
         )}
       </div>
     );
@@ -1066,41 +1085,41 @@ function Defenses({ data }: { data: CharacterData }) {
 
   return (
     <div class="sec">
-      <div class="sec-h"><span class="sec-h-title">防御 · 语言 · 工具</span></div>
+      <div class="sec-h"><span class="sec-h-title">{T("ccSecDefenses")}</span></div>
       <div class="sec-body">
-        {renderRow("抗性", "resistances", "res")}
-        {renderRow("免疫", "immunities", "imm")}
-        {renderRow("优势", "advantages", "adv")}
-        {renderRow("劣势", "disadvantages", "dis")}
+        {renderRow(T("ccResistances"), "resistances", "res")}
+        {renderRow(T("ccImmunities"), "immunities", "imm")}
+        {renderRow(T("ccAdvantages"), "advantages", "adv")}
+        {renderRow(T("ccDisadvantages"), "disadvantages", "dis")}
         {(editing || langs.length > 0) && (
           <div class="def-row">
-            <span class="def-label">语言</span>
+            <span class="def-label">{T("ccLanguages")}</span>
             {langs.map((x) => (
               <span class="def-tag">
                 {x}
                 {editing && (
-                  <button class="cc-tag-x" onClick={() => removeLangTool("languages", x)} title="移除">×</button>
+                  <button class="cc-tag-x" onClick={() => removeLangTool("languages", x)} title={T("ccRemove")}>×</button>
                 )}
               </span>
             ))}
             {editing && (
-              <button class="cc-add-tag" onClick={() => addLangTool("languages")} title="添加语言">+</button>
+              <button class="cc-add-tag" onClick={() => addLangTool("languages")} title={`${T("ccAddPrefix")}${T("ccLanguages")}`}>+</button>
             )}
           </div>
         )}
         {(editing || tools.length > 0) && (
           <div class="def-row">
-            <span class="def-label">工具</span>
+            <span class="def-label">{T("ccTools")}</span>
             {tools.map((x) => (
               <span class="def-tag">
                 {x}
                 {editing && (
-                  <button class="cc-tag-x" onClick={() => removeLangTool("tool_proficiencies", x)} title="移除">×</button>
+                  <button class="cc-tag-x" onClick={() => removeLangTool("tool_proficiencies", x)} title={T("ccRemove")}>×</button>
                 )}
               </span>
             ))}
             {editing && (
-              <button class="cc-add-tag" onClick={() => addLangTool("tool_proficiencies")} title="添加工具">+</button>
+              <button class="cc-add-tag" onClick={() => addLangTool("tool_proficiencies")} title={`${T("ccAddPrefix")}${T("ccTools")}`}>+</button>
             )}
           </div>
         )}
@@ -1129,12 +1148,12 @@ function CombatSection({ data }: { data: CharacterData }) {
     onPatch({ combat: { ...cb, weapons: next } });
   };
   const removeWeapon = (idx: number) => {
-    if (!window.confirm(`删除武器「${weapons[idx]?.name || "未命名"}」？`)) return;
+    if (!window.confirm(T("ccConfirmDelWeapon").replace("{name}", weapons[idx]?.name || T("ccUnnamed")))) return;
     const next = weapons.filter((_, i) => i !== idx);
     onPatch({ combat: { ...cb, weapons: next } });
   };
   const addWeapon = (ev?: Event) => {
-    const next = [...weapons, { name: "新武器", attack_bonus: "+0", damage: "1d6", damage_type: "" }];
+    const next = [...weapons, { name: T("ccNewWeapon"), attack_bonus: "+0", damage: "1d6", damage_type: "" }];
     onPatch({ combat: { ...cb, weapons: next } });
     smoothScrollToNewRow(ev, ".weap");
   };
@@ -1147,34 +1166,34 @@ function CombatSection({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">战斗 · 武器 · 护甲</span>
+        <span class="sec-h-title">{T("ccSecCombat")}</span>
         {editing && (
-          <button class="cc-add-tag" style={{ marginLeft: "auto" }} onClick={(e: any) => addWeapon(e)} title="新增武器">+ 武器</button>
+          <button class="cc-add-tag" style={{ marginLeft: "auto" }} onClick={(e: any) => addWeapon(e)} title={T("ccAddWeaponTitle")}>{T("ccAddWeaponBtn")}</button>
         )}
       </div>
       <div class="sec-body dense">
         {(armor.name || armor.ac_base != null) && (
           <div class="weap" style={{ background: "rgba(138,111,63,0.06)" }}>
             <div class="weap-name">
-              🛡 {armor.name || "护甲"}
-              {armorEquipped && <span class="weap-prof">已装备</span>}
-              {armorAttuned && <span class="weap-prof">同调</span>}
+              🛡 {armor.name || T("ccArmor")}
+              {armorEquipped && <span class="weap-prof">{T("ccEquipped")}</span>}
+              {armorAttuned && <span class="weap-prof">{T("ccAttuned")}</span>}
             </div>
-            <div class="weap-atk" title="基础 AC + 敏捷上限">
+            <div class="weap-atk" title={T("ccArmorAcTip")}>
               AC {armor.ac_base ?? "?"}
-              {typeof armor.dex_bonus_cap === "number" && ` (+敏≤${armor.dex_bonus_cap})`}
+              {typeof armor.dex_bonus_cap === "number" && ` (+${T("ccDexAbbr")}≤${armor.dex_bonus_cap})`}
             </div>
             <div class="weap-dmg" style={{ visibility: "hidden" }}>—</div>
             {armor.weight != null && (
-              <div class="weap-props">重量 {armor.weight} 磅</div>
+              <div class="weap-props">{T("ccWeight")} {armor.weight} {T("ccLbUnit")}</div>
             )}
           </div>
         )}
         {shield.ac_bonus != null && (
           <div class="weap" style={{ background: "rgba(138,111,63,0.06)" }}>
-            <div class="weap-name">⛨ 盾牌
-              <span class={`weap-prof${shieldEquipped ? "" : " is-off"}`}>{shieldEquipped ? "已装备" : "未装备"}</span>
-              {shieldAttuned && <span class="weap-prof">同调</span>}
+            <div class="weap-name">⛨ {T("ccShield")}
+              <span class={`weap-prof${shieldEquipped ? "" : " is-off"}`}>{shieldEquipped ? T("ccEquipped") : T("ccUnequipped")}</span>
+              {shieldAttuned && <span class="weap-prof">{T("ccAttuned")}</span>}
             </div>
             <div class="weap-atk">+{shield.ac_bonus} AC</div>
             <div class="weap-dmg" style={{ visibility: "hidden" }}>—</div>
@@ -1182,7 +1201,7 @@ function CombatSection({ data }: { data: CharacterData }) {
         )}
         {weapons.length === 0 && !armor.name && !shield.ac_bonus && (
           <div style={{ color: "var(--ink-mute)", fontStyle: "italic", padding: "8px" }}>
-            暂未配置武器或护甲
+            {T("ccNoWeaponsArmor")}
           </div>
         )}
         {weapons.map((w, idx) => {
@@ -1197,7 +1216,7 @@ function CombatSection({ data }: { data: CharacterData }) {
               <div class="weap" style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 1fr 1fr auto", gap: "6px", alignItems: "center" }}>
                 <input class="cc-edit-text" type="text"
                   value={w.name ?? ""}
-                  placeholder="武器名"
+                  placeholder={T("ccWeaponNamePh")}
                   onInput={(e: any) => updateWeapon(idx, { name: e.target.value })} />
                 <input class="cc-edit-text" type="text"
                   value={w.attack_bonus ?? ""}
@@ -1209,9 +1228,9 @@ function CombatSection({ data }: { data: CharacterData }) {
                   onInput={(e: any) => updateWeapon(idx, { damage: e.target.value })} />
                 <input class="cc-edit-text" type="text"
                   value={w.damage_type ?? ""}
-                  placeholder="挥砍 / 穿刺 / …"
+                  placeholder={T("ccDmgTypePh")}
                   onInput={(e: any) => updateWeapon(idx, { damage_type: e.target.value })} />
-                <button class="cc-tag-x" onClick={() => removeWeapon(idx)} title="删除武器">×</button>
+                <button class="cc-tag-x" onClick={() => removeWeapon(idx)} title={T("ccDelWeaponTitle")}>×</button>
               </div>
             );
           }
@@ -1219,16 +1238,16 @@ function CombatSection({ data }: { data: CharacterData }) {
             <div class="weap">
               <div class="weap-name">
                 ⚔ {w.name || "?"}
-                {w.proficient && <span class="weap-prof">熟</span>}
+                {w.proficient && <span class="weap-prof">{T("ccProfShort")}</span>}
               </div>
               <div class="weap-atk"
-                onClick={() => rollExpr(`${w.name} 命中`, atkExpr)}
-                onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${w.name} 命中（优势）`, atkExpr, "adv"); }}
-                title={`左键投，右键优势 · ${atkExpr}`}>
+                onClick={() => rollExpr(`${w.name} ${T("ccHit")}`, atkExpr)}
+                onContextMenu={(e: any) => { e.preventDefault(); rollExpr(`${w.name} ${T("ccHitAdv")}`, atkExpr, "adv"); }}
+                title={`${T("ccRollLR")} · ${atkExpr}`}>
                 {w.attack_bonus || `${fmtMod(atkBn)}`}
               </div>
               <div class="weap-dmg"
-                onClick={() => rollExpr(`${w.name} 伤害${w.damage_type ? `(${w.damage_type})` : ""}`, dmgExpr)}
+                onClick={() => rollExpr(`${w.name} ${T("ccDamage")}${w.damage_type ? `(${w.damage_type})` : ""}`, dmgExpr)}
                 title={`${w.damage} ${w.damage_type ?? ""}`}>
                 {w.damage ?? "—"} {w.damage_type ? <span style={{ opacity: 0.7, fontSize: "10px" }}>{w.damage_type}</span> : ""}
               </div>
@@ -1237,11 +1256,11 @@ function CombatSection({ data }: { data: CharacterData }) {
                   onClick={(e: any) => {
                     e.stopPropagation();
                     rollExpr(
-                      `${w.name} 附加伤害${w.extra_damage_type ? `(${w.extra_damage_type})` : ""}`,
+                      `${w.name} ${T("ccExtraDamage")}${w.extra_damage_type ? `(${w.extra_damage_type})` : ""}`,
                       String(w.extra_damage).replace(/\s+/g, ""),
                     );
                   }}
-                  title={`附加伤害骰 ${w.extra_damage}${w.extra_damage_type ? ` · ${w.extra_damage_type}` : ""}`}>
+                  title={`${T("ccExtraDmgDie")} ${w.extra_damage}${w.extra_damage_type ? ` · ${w.extra_damage_type}` : ""}`}>
                   +{w.extra_damage} {w.extra_damage_type ? <span style={{ opacity: 0.7, fontSize: "10px" }}>{w.extra_damage_type}</span> : ""}
                 </div>
               )}
@@ -1249,8 +1268,8 @@ function CombatSection({ data }: { data: CharacterData }) {
                 <div class="weap-props">
                   {[
                     w.properties,
-                    w.weight != null ? `${w.weight}磅` : null,
-                    w.ammo_type ? `弹药:${w.ammo_type}` : null,
+                    w.weight != null ? `${w.weight} ${T("ccLbUnit")}` : null,
+                    w.ammo_type ? `${T("ccAmmo")}:${w.ammo_type}` : null,
                   ].filter(Boolean).join(" · ")}
                 </div>
               )}
@@ -1301,7 +1320,7 @@ function SpellsSection({ data }: { data: CharacterData }) {
   };
   const removeSpell = (slot: "cantrips_known" | "always_known" | "prepared", idx: number) => {
     const cur = Array.isArray((sp as any)[slot]) ? (sp as any)[slot] : [];
-    if (!window.confirm(`删除「${cur[idx]?.name || "未命名"}」？`)) return;
+    if (!window.confirm(T("ccConfirmDelItem").replace("{name}", cur[idx]?.name || T("ccUnnamed")))) return;
     onPatch({ spellcasting: { ...sp, [slot]: cur.filter((_: any, i: number) => i !== idx) } });
   };
   const patchSpell = (slot: "cantrips_known" | "always_known" | "prepared", idx: number, patch: Record<string, any>) => {
@@ -1350,15 +1369,15 @@ function SpellsSection({ data }: { data: CharacterData }) {
               const n = parseInt(e.target.value, 10);
               if (Number.isFinite(n)) patchSpell(slot, idx, { level: n });
             }}
-            title="环阶（0 = 戏法）" />
+            title={T("ccSpellLevelTip")} />
           <input class="cc-edit-text" type="text"
             style={{ flex: "1" }}
             value={s.name ?? ""}
-            placeholder="法术名"
+            placeholder={T("ccSpellNamePh")}
             onInput={(e: any) => patchSpell(slot, idx, { name: e.target.value })} />
           <button class="cc-tag-x"
             onClick={() => removeSpell(slot, idx)}
-            title="删除">×</button>
+            title={T("ccDelete")}>×</button>
         </div>
       );
     }
@@ -1366,9 +1385,9 @@ function SpellsSection({ data }: { data: CharacterData }) {
       <>
         <div class="spell"
           onClick={() => setOpenSpell(isOpen ? null : key)}
-          title="点击展开法术详情">
+          title={T("ccSpellExpandTip")}>
           <span class={`spell-lv ${(s.level ?? 0) === 0 ? "cantrip" : ""}`}>
-            {(s.level ?? 0) === 0 ? "戏" : `${s.level}环`}
+            {(s.level ?? 0) === 0 ? T("ccCantripBadge") : `${s.level}${T("ccRing")}`}
           </span>
           {/* 2026-05-15 — the spell-name used to be its own clickable
               search trigger (`onClick → fireNameSearch + stopPropagation`).
@@ -1378,18 +1397,18 @@ function SpellsSection({ data }: { data: CharacterData }) {
               (including the name) open the detail panel. Players who
               still want to search can use the global search bar. */}
           <span class="spell-name">{s.name}</span>
-          {s.meta?.concentration && <span class="spell-tag conc">专注</span>}
-          {s.meta?.ritual && <span class="spell-tag ritual">仪式</span>}
+          {s.meta?.concentration && <span class="spell-tag conc">{T("ccConcentration")}</span>}
+          {s.meta?.ritual && <span class="spell-tag ritual">{T("ccRitual")}</span>}
         </div>
         {isOpen && s.description && (
           <div class="spell-detail">
             {s.meta && (
               <div class="meta">
                 {s.meta.school && <span>{s.meta.school}</span>}
-                {s.meta.casting_time && <span>施法 {s.meta.casting_time}</span>}
-                {s.meta.range && <span>距离 {s.meta.range}</span>}
+                {s.meta.casting_time && <span>{T("ccCastingTime")} {s.meta.casting_time}</span>}
+                {s.meta.range && <span>{T("ccRange")} {s.meta.range}</span>}
                 {s.meta.components && <span>{s.meta.components}</span>}
-                {s.meta.duration && <span>持续 {s.meta.duration}</span>}
+                {s.meta.duration && <span>{T("ccDuration")} {s.meta.duration}</span>}
                 {s.meta.source && <span>《{s.meta.source}》</span>}
               </div>
             )}
@@ -1403,13 +1422,13 @@ function SpellsSection({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">法术</span>
+        <span class="sec-h-title">{T("ccSecSpells")}</span>
         {(sp.spellcasting_ability || sp.save_dc) && (
           <span class="sec-h-meta">
-            {sp.spellcasting_ability && `关键属性: ${sp.spellcasting_ability}`}
-            {sp.save_dc != null && `  ·  豁免DC: ${sp.save_dc}`}
-            {sp.attack_bonus && `  ·  攻击: ${sp.attack_bonus}`}
-            {sp.max_prepared != null && `  ·  最大准备: ${sp.max_prepared}`}
+            {sp.spellcasting_ability && `${T("ccSpellAbility")}: ${sp.spellcasting_ability}`}
+            {sp.save_dc != null && `  ·  ${T("ccSaveDC")}: ${sp.save_dc}`}
+            {sp.attack_bonus && `  ·  ${T("ccSpellAttack")}: ${sp.attack_bonus}`}
+            {sp.max_prepared != null && `  ·  ${T("ccMaxPrepared")}: ${sp.max_prepared}`}
           </span>
         )}
       </div>
@@ -1425,7 +1444,7 @@ function SpellsSection({ data }: { data: CharacterData }) {
               // level so the panel hides it in view mode again.
               return (
                 <div class={`slot ${has ? "has-slots" : ""}`}>
-                  <div class="slot-lv">{lv}环</div>
+                  <div class="slot-lv">{lv}{T("ccRing")}</div>
                   <input class="cc-edit-num" type="number"
                     style={{ width: "100%", textAlign: "center", fontSize: "13px" }}
                     value={s?.current ?? 0}
@@ -1445,7 +1464,7 @@ function SpellsSection({ data }: { data: CharacterData }) {
             }
             return (
               <div class={`slot ${has ? "has-slots" : ""}`}>
-                <div class="slot-lv">{lv}环</div>
+                <div class="slot-lv">{lv}{T("ccRing")}</div>
                 <div class="slot-cur">{has ? (s.current ?? 0) : "—"}</div>
                 <div class="slot-max">{has ? `/${s.max}` : ""}</div>
               </div>
@@ -1461,11 +1480,11 @@ function SpellsSection({ data }: { data: CharacterData }) {
         {(editing || !!cantrips.length) && (
           <div class="spell-group">
             <div class="spell-group-h" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span>戏法</span>
+              <span>{T("ccCantrips")}</span>
               {editing && (
                 <button class="cc-add-tag"
                   onClick={(e: any) => openSpellPicker("cantrips_known", 0, e)}
-                  title="从法术库挑选戏法加入">+</button>
+                  title={T("ccAddCantripTitle")}>+</button>
               )}
             </div>
             {cantrips.map((s, i) => renderSpell(s, i, "cantrip", editing ? "cantrips_known" : undefined))}
@@ -1476,11 +1495,11 @@ function SpellsSection({ data }: { data: CharacterData }) {
         {(editing || !!always.length) && (
           <div class="spell-group">
             <div class="spell-group-h" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <span>始终准备</span>
+              <span>{T("ccAlwaysPrepared")}</span>
               {editing && (
                 <button class="cc-add-tag"
                   onClick={(e: any) => openSpellPicker("always_known", 1, e)}
-                  title="从法术库挑选始终准备法术加入">+</button>
+                  title={T("ccAddAlwaysTitle")}>+</button>
               )}
             </div>
             {always.map((s, i) => renderSpell(s, i, "always", editing ? "always_known" : undefined))}
@@ -1496,17 +1515,17 @@ function SpellsSection({ data }: { data: CharacterData }) {
           editing ? (
             <div class="spell-group">
               <div class="spell-group-h" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span>准备法术</span>
+                <span>{T("ccPrepared")}</span>
                 <button class="cc-add-tag"
                   onClick={(e: any) => openSpellPicker("prepared", 1, e)}
-                  title="从法术库挑选准备法术加入">+</button>
+                  title={T("ccAddPreparedTitle")}>+</button>
               </div>
               {prepared.map((s, i) => renderSpell(s, i, "p", "prepared"))}
             </div>
           ) : (
             Object.entries(groups).map(([g, list]) => (
               <div class="spell-group">
-                <div class="spell-group-h">准备法术 · 组 {g}</div>
+                <div class="spell-group-h">{T("ccPrepared")} · {T("ccGroup")} {g}</div>
                 {list.map((s, i) => renderSpell(s, i, `g${g}`))}
               </div>
             ))
@@ -1516,9 +1535,9 @@ function SpellsSection({ data }: { data: CharacterData }) {
       {pickFor && (
         <SpellPickModal
           title={
-            pickFor.slot === "cantrips_known" ? "添加戏法"
-              : pickFor.slot === "always_known" ? "添加始终准备法术"
-              : "添加准备法术"
+            pickFor.slot === "cantrips_known" ? T("ccAddCantripModal")
+              : pickFor.slot === "always_known" ? T("ccAddAlwaysModal")
+              : T("ccAddPreparedModal")
           }
           onCancel={() => setPickFor(null)}
           onPick={commitSpellPick}
@@ -1556,7 +1575,7 @@ function FeatureBlock({
       <div class="spell-group-h" style={{ marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px" }}>
         <span>{title}</span>
         {editing && slot && (
-          <button class="cc-add-tag" onClick={(e: any) => onAdd?.(slot, e)} title={`新增${title}`}>+</button>
+          <button class="cc-add-tag" onClick={(e: any) => onAdd?.(slot, e)} title={`${T("ccAddPrefix")}${title}`}>+</button>
         )}
       </div>
       {items.map((f, i) => {
@@ -1568,7 +1587,7 @@ function FeatureBlock({
                 <input class="cc-edit-text" type="text"
                   style={{ flex: "1" }}
                   value={f.name ?? ""}
-                  placeholder="名称"
+                  placeholder={T("ccNamePh")}
                   onInput={(e: any) => onPatchItem?.(slot, i, { name: e.target.value })} />
                 <input class="cc-edit-num" type="number"
                   style={{ width: "54px" }}
@@ -1579,12 +1598,12 @@ function FeatureBlock({
                     const n = v === "" ? null : parseInt(v, 10);
                     onPatchItem?.(slot, i, { level: n });
                   }} />
-                <button class="cc-tag-x" onClick={() => onRemove?.(slot, i)} title="删除">×</button>
+                <button class="cc-tag-x" onClick={() => onRemove?.(slot, i)} title={T("ccDelete")}>×</button>
               </div>
               <textarea class="cc-edit-text"
                 style={{ width: "100%", minHeight: "60px", marginTop: "4px", fontFamily: "inherit", fontSize: "12px" }}
                 value={f.description ?? ""}
-                placeholder="描述（点击展开 · 此处编辑全文）"
+                placeholder={T("ccDescPh")}
                 onInput={(e: any) => onPatchItem?.(slot, i, { description: e.target.value })} />
             </div>
           );
@@ -1602,7 +1621,7 @@ function FeatureBlock({
                   return next;
                 });
               }}
-              title="点击折叠 / 展开"
+              title={T("ccToggleCollapse")}
             >
               <span class="feat-name">
                 {/* 2026-05-15 — dropped the inner "search by name"
@@ -1637,13 +1656,13 @@ function FeaturesSection({ data }: { data: CharacterData }) {
   // triad that the FeatureBlock components call with their slot key.
   const addItem = (slot: string, ev?: Event) => {
     const cur = Array.isArray((f as any)[slot]) ? (f as any)[slot] : [];
-    onPatch({ features: { ...f, [slot]: [...cur, { name: "新条目", description: "" }] } });
+    onPatch({ features: { ...f, [slot]: [...cur, { name: T("ccNewEntry"), description: "" }] } });
     smoothScrollToNewRow(ev, ".feat");
   };
   const removeItem = (slot: string, idx: number) => {
     const cur = Array.isArray((f as any)[slot]) ? (f as any)[slot] : [];
-    const name = cur[idx]?.name || "未命名";
-    if (!window.confirm(`删除「${name}」？`)) return;
+    const name = cur[idx]?.name || T("ccUnnamed");
+    if (!window.confirm(T("ccConfirmDelItem").replace("{name}", name))) return;
     onPatch({ features: { ...f, [slot]: cur.filter((_: any, i: number) => i !== idx) } });
   };
   const patchItem = (slot: string, idx: number, patch: Record<string, any>) => {
@@ -1659,17 +1678,17 @@ function FeaturesSection({ data }: { data: CharacterData }) {
 
   return (
     <div class="sec">
-      <div class="sec-h"><span class="sec-h-title">特性 · 专长</span></div>
+      <div class="sec-h"><span class="sec-h-title">{T("ccSecFeatures")}</span></div>
       <div class="sec-body">
-        <FeatureBlock title="职业特性" items={cls}
+        <FeatureBlock title={T("ccClassFeatures")} items={cls}
           slot="class_features" onAdd={addItem} onRemove={removeItem} onPatchItem={patchItem} />
-        <FeatureBlock title="种族特性" items={race}
+        <FeatureBlock title={T("ccRaceFeatures")} items={race}
           slot="race_features" onAdd={addItem} onRemove={removeItem} onPatchItem={patchItem} />
-        <FeatureBlock title="战斗风格" items={fightingStyle}
+        <FeatureBlock title={T("ccFightingStyle")} items={fightingStyle}
           slot="fighting_style_feats" onAdd={addItem} onRemove={removeItem} onPatchItem={patchItem} />
-        <FeatureBlock title="特殊能力" items={special}
+        <FeatureBlock title={T("ccSpecialAbilities")} items={special}
           slot="special_abilities" onAdd={addItem} onRemove={removeItem} onPatchItem={patchItem} />
-        <FeatureBlock title="专长" items={feats}
+        <FeatureBlock title={T("ccFeats")} items={feats}
           slot="feats" onAdd={addItem} onRemove={removeItem} onPatchItem={patchItem} />
       </div>
     </div>
@@ -1684,16 +1703,16 @@ function BackgroundSection({ data }: { data: CharacterData }) {
   // ...) live on data.background. Identity-level fields (玩家 / 性别
   // / 年龄 / ...) live on data.identity. We expose both with inline
   // edits in edit mode.
-  type Block = { label: string; key: string; body: any };
+  type Block = { labelKey: Parameters<typeof t>[1]; key: string; body: any };
   const blocks: Block[] = [
-    { label: "外貌", key: "appearance", body: bg.appearance },
-    { label: "性格", key: "personality", body: bg.personality },
-    { label: "特质", key: "traits", body: bg.traits },
-    { label: "理念", key: "ideals", body: bg.ideals },
-    { label: "羁绊", key: "bonds", body: bg.bonds },
-    { label: "缺陷", key: "flaws", body: bg.flaws },
-    { label: "故事", key: "story", body: bg.story },
-    { label: "其他", key: "description", body: bg.description },
+    { labelKey: "ccBgAppearance", key: "appearance", body: bg.appearance },
+    { labelKey: "ccBgPersonality", key: "personality", body: bg.personality },
+    { labelKey: "ccBgTraits", key: "traits", body: bg.traits },
+    { labelKey: "ccBgIdeals", key: "ideals", body: bg.ideals },
+    { labelKey: "ccBgBonds", key: "bonds", body: bg.bonds },
+    { labelKey: "ccBgFlaws", key: "flaws", body: bg.flaws },
+    { labelKey: "ccBgStory", key: "story", body: bg.story },
+    { labelKey: "ccBgOther", key: "description", body: bg.description },
   ];
   const setBg = (k: string, v: any) => onPatch({ background: { ...bg, [k]: v } });
   const setId = (k: string, v: any) => onPatch({ identity: { ...id, [k]: v } });
@@ -1703,39 +1722,39 @@ function BackgroundSection({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">背景 · 个人</span>
-        {!editing && bg.background_name && <span class="sec-h-meta">背景：{bg.background_name}</span>}
+        <span class="sec-h-title">{T("ccSecBackground")}</span>
+        {!editing && bg.background_name && <span class="sec-h-meta">{T("ccBackgroundLabel")}{bg.background_name}</span>}
       </div>
       <div class="sec-body">
         {editing && (
           <div class="def-row" style={{ marginBottom: "10px" }}>
-            <span class="def-label">背景名</span>
+            <span class="def-label">{T("ccBackgroundNameField")}</span>
             <input class="cc-edit-text" type="text" style={{ flex: "1" }}
               value={bg.background_name ?? ""}
-              placeholder="如：哲人 / 罪犯 / 海上水手 ..."
+              placeholder={T("ccBackgroundNamePh")}
               onInput={(e: any) => setBg("background_name", e.target.value)} />
           </div>
         )}
         <dl class="kv" style={{ marginBottom: "12px" }}>
-          {(editing || id.player) && (<><dt>玩家</dt><dd>{editing
+          {(editing || id.player) && (<><dt>{T("ccPlayer")}</dt><dd>{editing
             ? <input class="cc-edit-text" type="text" value={id.player ?? ""} onInput={(e: any) => setId("player", e.target.value)} />
             : id.player}</dd></>)}
-          {(editing || id.gender) && (<><dt>性别</dt><dd>{editing
+          {(editing || id.gender) && (<><dt>{T("ccGender")}</dt><dd>{editing
             ? <input class="cc-edit-text" type="text" value={id.gender ?? ""} onInput={(e: any) => setId("gender", e.target.value)} />
             : id.gender}</dd></>)}
-          {(editing || id.age != null) && (<><dt>年龄</dt><dd>{editing
+          {(editing || id.age != null) && (<><dt>{T("ccAge")}</dt><dd>{editing
             ? <input class="cc-edit-num" type="number" value={id.age ?? ""} onInput={(e: any) => {
                 const v = e.target.value;
                 setId("age", v === "" ? null : parseInt(v, 10));
               }} />
             : id.age}</dd></>)}
-          {(editing || id.height) && (<><dt>身高</dt><dd>{editing
+          {(editing || id.height) && (<><dt>{T("ccHeight")}</dt><dd>{editing
             ? <input class="cc-edit-text" type="text" value={id.height ?? ""} onInput={(e: any) => setId("height", e.target.value)} />
             : id.height}</dd></>)}
-          {(editing || id.weight) && (<><dt>体重</dt><dd>{editing
+          {(editing || id.weight) && (<><dt>{T("ccBodyWeight")}</dt><dd>{editing
             ? <input class="cc-edit-text" type="text" value={id.weight ?? ""} onInput={(e: any) => setId("weight", e.target.value)} />
             : id.weight}</dd></>)}
-          {(editing || id.hometown) && (<><dt>家乡</dt><dd>{editing
+          {(editing || id.hometown) && (<><dt>{T("ccHometown")}</dt><dd>{editing
             ? <input class="cc-edit-text" type="text" value={id.hometown ?? ""} onInput={(e: any) => setId("hometown", e.target.value)} />
             : id.hometown}</dd></>)}
         </dl>
@@ -1743,13 +1762,13 @@ function BackgroundSection({ data }: { data: CharacterData }) {
           <div class="bio-grid">
             {visibleBlocks.map((b) => (
               <div class="bio-block">
-                <div class="bio-block-h">{b.label}</div>
+                <div class="bio-block-h">{T(b.labelKey)}</div>
                 <div class="bio-block-body">
                   {editing ? (
                     <textarea class="cc-edit-text"
                       style={{ width: "100%", minHeight: "72px", fontFamily: "inherit", fontSize: "12px" }}
                       value={b.body ?? ""}
-                      placeholder={`${b.label}…`}
+                      placeholder={`${T(b.labelKey)}…`}
                       onInput={(e: any) => setBg(b.key, e.target.value)} />
                   ) : (
                     b.body
@@ -1760,7 +1779,7 @@ function BackgroundSection({ data }: { data: CharacterData }) {
           </div>
         )}
         {!editing && !visibleBlocks.length && (
-          <div style={{ color: "var(--ink-mute)", fontStyle: "italic" }}>暂无背景信息</div>
+          <div style={{ color: "var(--ink-mute)", fontStyle: "italic" }}>{T("ccNoBackground")}</div>
         )}
       </div>
     </div>
@@ -1782,7 +1801,7 @@ function InventorySection({ data }: { data: CharacterData }) {
   const rawItems: any[] = Array.isArray(inv.items) ? inv.items : [];
   const containers: any[] = Array.isArray(inv.containers) ? inv.containers : [];
   const containerItems: any[] = containers.flatMap((c: any) => {
-    const label = String(c?.label ?? "背包");
+    const label = String(c?.label ?? T("ccBackpack"));
     return Array.isArray(c?.items)
       ? c.items.map((it: any) => ({
           name: it?.name ?? "",
@@ -1815,24 +1834,24 @@ function InventorySection({ data }: { data: CharacterData }) {
     onPatch({ inventory: { ...inv, items: next } });
   };
   const removeItem = (idx: number) => {
-    if (!window.confirm(`删除「${items[idx]?.name || "未命名"}」？`)) return;
+    if (!window.confirm(T("ccConfirmDelItem").replace("{name}", items[idx]?.name || T("ccUnnamed")))) return;
     const next = items.filter((_, i) => i !== idx);
     onPatch({ inventory: { ...inv, items: next } });
   };
   const addItem = (ev?: Event) => {
-    const next = [...items, { name: "新物品", weight: null, location: "", description: "" }];
+    const next = [...items, { name: T("ccNewItem"), weight: null, location: "", description: "" }];
     onPatch({ inventory: { ...inv, items: next } });
     smoothScrollToNewRow(ev, ".weap");
   };
   // Wondrous items reuse the FeatureBlock add/remove pattern via the
   // same data shape (name + description). Slot is on inv directly.
   const addWondrous = (_slot?: string, ev?: Event) => {
-    const next = [...wondrous, { name: "新奇物", description: "" }];
+    const next = [...wondrous, { name: T("ccNewWondrous"), description: "" }];
     onPatch({ inventory: { ...inv, wondrous_items: next } });
     smoothScrollToNewRow(ev, ".feat");
   };
   const removeWondrous = (_slot: string, idx: number) => {
-    if (!window.confirm(`删除「${wondrous[idx]?.name || "未命名"}」？`)) return;
+    if (!window.confirm(T("ccConfirmDelItem").replace("{name}", wondrous[idx]?.name || T("ccUnnamed")))) return;
     const next = wondrous.filter((_, i) => i !== idx);
     onPatch({ inventory: { ...inv, wondrous_items: next } });
   };
@@ -1864,36 +1883,36 @@ function InventorySection({ data }: { data: CharacterData }) {
   return (
     <div class="sec">
       <div class="sec-h">
-        <span class="sec-h-title">装备 · 货币 · 负重</span>
-        {!editing && inv.currency?.total_gp_raw && <span class="sec-h-meta">总值 {inv.currency.total_gp_raw}</span>}
+        <span class="sec-h-title">{T("ccSecInventory")}</span>
+        {!editing && inv.currency?.total_gp_raw && <span class="sec-h-meta">{T("ccTotalValue")} {inv.currency.total_gp_raw}</span>}
         {editing && (
-          <button class="cc-add-tag" style={{ marginLeft: "auto" }} onClick={(e: any) => addItem(e)} title="新增物品">+ 物品</button>
+          <button class="cc-add-tag" style={{ marginLeft: "auto" }} onClick={(e: any) => addItem(e)} title={T("ccAddItemTitle")}>{T("ccAddItemBtn")}</button>
         )}
       </div>
       <div class="sec-body">
         <div class="coin-row">
-          {editNum("铂PP", "pp", "pp")}
-          {editNum("金GP", "gp", "gp")}
-          {editNum("银EP", "ep", "ep")}
-          {editNum("铜SP", "sp", "sp")}
-          {editNum("铜CP", "cp", "cp")}
+          {editNum(T("ccCoinPP"), "pp", "pp")}
+          {editNum(T("ccCoinGP"), "gp", "gp")}
+          {editNum(T("ccCoinEP"), "ep", "ep")}
+          {editNum(T("ccCoinSP"), "sp", "sp")}
+          {editNum(T("ccCoinCP"), "cp", "cp")}
         </div>
 
         {(enc.equipment_weight != null || enc.total_weight != null) && (
           <div style={{ marginBottom: "10px" }}>
-            <div class="bio-block-h" style={{ marginBottom: "5px" }}>负重</div>
+            <div class="bio-block-h" style={{ marginBottom: "5px" }}>{T("ccEncumbrance")}</div>
             <div class="enc-bar">
-              <div class="enc-cell">装备 <div class="v">{enc.equipment_weight ?? 0}</div></div>
-              <div class="enc-cell">背包 <div class="v">{(enc.pack1_weight ?? 0) + (enc.pack2_weight ?? 0)}</div></div>
-              <div class="enc-cell">总计 <div class="v">{enc.total_weight ?? 0}</div></div>
-              <div class="enc-cell">上限 <div class="v">{enc.max_capacity ?? "?"}</div></div>
+              <div class="enc-cell">{T("ccEquipmentWt")} <div class="v">{enc.equipment_weight ?? 0}</div></div>
+              <div class="enc-cell">{T("ccBackpack")} <div class="v">{(enc.pack1_weight ?? 0) + (enc.pack2_weight ?? 0)}</div></div>
+              <div class="enc-cell">{T("ccTotal")} <div class="v">{enc.total_weight ?? 0}</div></div>
+              <div class="enc-cell">{T("ccCapacity")} <div class="v">{enc.max_capacity ?? "?"}</div></div>
             </div>
           </div>
         )}
 
         {(editing || !!wondrous.length) && (
           <FeatureBlock
-            title="奇物 / 魔法物品"
+            title={T("ccWondrousTitle")}
             items={wondrous}
             slot={editing ? "wondrous_items" : undefined}
             onAdd={editing ? addWondrous : undefined}
@@ -1903,32 +1922,32 @@ function InventorySection({ data }: { data: CharacterData }) {
 
         {!editing && items.length === 0 && !wondrous.length && (
           <div style={{ color: "var(--ink-mute)", fontStyle: "italic", padding: "6px 0" }}>
-            （暂无背包细目，可在 xlsx 角色卡 "背包1/2" 表更新）
+            {T("ccNoPackDetail")}
           </div>
         )}
         {(editing || !!items.length) && (
           <div style={{ marginTop: "8px" }}>
-            <div class="bio-block-h" style={{ marginBottom: "5px" }}>背包</div>
+            <div class="bio-block-h" style={{ marginBottom: "5px" }}>{T("ccBackpack")}</div>
             {items.map((it: any, idx: number) => {
               if (editing) {
                 return (
                   <div class="weap" style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr 0.8fr auto", gap: "6px", alignItems: "center" }}>
                     <input class="cc-edit-text" type="text"
                       value={it.name ?? ""}
-                      placeholder="物品名"
+                      placeholder={T("ccItemNamePh")}
                       onInput={(e: any) => updateItem(idx, { name: e.target.value })} />
                     <input class="cc-edit-text" type="text"
                       value={it.weight ?? ""}
-                      placeholder="重量"
+                      placeholder={T("ccWeightPh")}
                       onInput={(e: any) => {
                         const v = e.target.value;
                         updateItem(idx, { weight: v === "" ? null : parseFloat(v) });
                       }} />
                     <input class="cc-edit-text" type="text"
                       value={it.location ?? ""}
-                      placeholder="位置"
+                      placeholder={T("ccLocationPh")}
                       onInput={(e: any) => updateItem(idx, { location: e.target.value })} />
-                    <button class="cc-tag-x" onClick={() => removeItem(idx)} title="删除">×</button>
+                    <button class="cc-tag-x" onClick={() => removeItem(idx)} title={T("ccDelete")}>×</button>
                   </div>
                 );
               }
@@ -1939,7 +1958,7 @@ function InventorySection({ data }: { data: CharacterData }) {
               // visible.
               const qty = it.quantity != null && it.quantity !== 1 ? ` × ${it.quantity}` : "";
               const weightStr = it.weight != null && it.weight !== ""
-                ? `${it.weight} 磅` : "";
+                ? `${it.weight} ${T("ccLbUnit")}` : "";
               const loc = it.location ? `· ${it.location}` : "";
               const meta = [weightStr, loc].filter(Boolean).join(" ");
               return (
@@ -1968,12 +1987,18 @@ function App() {
   // 2026-05-14 (#14) — edit-mode flag, toggled from the header.
   const [editing, setEditing] = useState(false);
   const [savingEdits, setSavingEdits] = useState(false);
+  // i18n — mirror `lang` state into the module-level `_lang` at the top
+  // of each render (parent renders before children, so T() reads the
+  // live value everywhere) and re-render on a language flip.
+  const [lang, setLang] = useState<Language>(_lang);
+  _lang = lang;
+  useEffect(() => onLangChange((l) => setLang((l as Language) ?? "zh")), []);
   const roomId = getQS("room") || "";
   const cardId = getQS("card") || "";
 
   const loadData = useCallback(async () => {
     if (!roomId || !cardId) {
-      setError("URL 缺少 room 或 card 参数");
+      setError(T("ccErrNoParams"));
       return;
     }
     setError(null);
@@ -1986,7 +2011,7 @@ function App() {
       const json = await res.json();
       setData(normalizeCombatGearFlags(json));
     } catch (e: any) {
-      setError(`加载失败：${e?.message || String(e)}`);
+      setError(`${T("ccLoadFailedPrefix")}${e?.message || String(e)}`);
     }
   }, [roomId, cardId]);
 
@@ -2107,9 +2132,9 @@ function App() {
     // Lightweight toast — reuses the existing alert pattern from
     // processImportFiles. Could be upgraded to an inline banner.
     if (ok) {
-      window.alert(`已复制角色卡 JSON 到剪贴板（${text.length} 字符）。可粘贴到另一张卡的「粘贴 JSON」或 xlsx 主要!AV1 公式里。`);
+      window.alert(T("ccCopiedAlert").replace("{n}", String(text.length)));
     } else {
-      window.alert("复制到剪贴板失败 — 请用「导出 JSON」下载文件后手动打开复制。");
+      window.alert(T("ccCopyFailAlert"));
     }
   }, [data]);
 
@@ -2138,7 +2163,7 @@ function App() {
   // paste-text modal. `source` is for the result alert message.
   const applyJsonObject = useCallback(async (parsed: any, source: string): Promise<string> => {
     if (!parsed || typeof parsed !== "object" || !("abilities" in parsed || "identity" in parsed)) {
-      return `✕ ${source} (不像角色卡 JSON，缺少 identity / abilities 字段)`;
+      return `✕ ${source} ${T("ccNotCardJson")}`;
     }
     setData(normalizeCombatGearFlags(parsed));
     try {
@@ -2150,7 +2175,7 @@ function App() {
       });
       if (!res.ok) {
         const body = await res.text();
-        return `⚠ ${source} (本地预览，服务器保存失败 HTTP ${res.status}: ${body.slice(0, 120)})`;
+        return `⚠ ${source} ${T("ccSaveFailHttp").replace("{status}", String(res.status)).replace("{body}", body.slice(0, 120))}`;
       }
       const result = await res.json();
       try {
@@ -2162,10 +2187,10 @@ function App() {
         OBR.broadcast.sendMessage(BC_CARD_UPDATED, updatedPayload, { destination: "REMOTE" });
       } catch {}
       let msg = `✓ ${source} → ${result.name || "current card"}`;
-      if (result.render_warning) msg += `\n  (旧版 HTML 渲染告警：${result.render_warning})`;
+      if (result.render_warning) msg += T("ccRenderWarn").replace("{warn}", result.render_warning);
       return msg;
     } catch (e: any) {
-      return `⚠ ${source} (服务器保存失败: ${e?.message || String(e)})`;
+      return `⚠ ${source} ${T("ccSaveFail").replace("{err}", e?.message || String(e))}`;
     }
   }, [roomId, cardId]);
 
@@ -2187,14 +2212,14 @@ function App() {
       const lower = f.name.toLowerCase();
       if (lower.endsWith(".json")) {
         if (currentJsonImported) {
-          summary.push(`⏭ ${f.name} (跳过 — 已导入当前卡，多个 JSON 无法批量替换)`);
+          summary.push(`⏭ ${f.name} ${T("ccSkipImported")}`);
           continue;
         }
         try {
           const text = await f.text();
           const parsed = JSON.parse(text);
           if (!parsed || typeof parsed !== "object" || !("abilities" in parsed || "identity" in parsed)) {
-            summary.push(`✕ ${f.name} (不像角色卡 JSON，缺少 identity / abilities 字段)`);
+            summary.push(`✕ ${f.name} ${T("ccNotCardJson")}`);
             continue;
           }
           setData(normalizeCombatGearFlags(parsed));
@@ -2207,7 +2232,7 @@ function App() {
             });
             if (!res.ok) {
               const body = await res.text();
-              summary.push(`⚠ ${f.name} (本地预览，服务器保存失败 HTTP ${res.status}: ${body.slice(0, 120)})`);
+              summary.push(`⚠ ${f.name} ${T("ccSaveFailHttp").replace("{status}", String(res.status)).replace("{body}", body.slice(0, 120))}`);
             } else {
               const result = await res.json();
               try {
@@ -2225,15 +2250,15 @@ function App() {
               } catch {}
               summary.push(`✓ ${f.name} → ${result.name || "current card"}`);
               if (result.render_warning) {
-                summary.push(`  (旧版 HTML 渲染告警：${result.render_warning})`);
+                summary.push(T("ccRenderWarn").replace("{warn}", result.render_warning));
               }
             }
           } catch (e: any) {
-            summary.push(`⚠ ${f.name} (服务器保存失败: ${e?.message || String(e)})`);
+            summary.push(`⚠ ${f.name} ${T("ccSaveFail").replace("{err}", e?.message || String(e))}`);
           }
           currentJsonImported = true;
         } catch (e: any) {
-          summary.push(`✕ ${f.name} (JSON 解析失败: ${e?.message || String(e)})`);
+          summary.push(`✕ ${f.name} ${T("ccJsonParseFail").replace("{err}", e?.message || String(e))}`);
         }
       } else if (lower.endsWith(".xlsx")) {
         // POST /upload — same endpoint as cc-panel's xlsx upload
@@ -2250,7 +2275,7 @@ function App() {
           );
           if (!r.ok) {
             const body = await r.text();
-            summary.push(`✕ ${f.name} (xlsx 上传失败 HTTP ${r.status}: ${body.slice(0, 120)})`);
+            summary.push(`✕ ${f.name} ${T("ccXlsxFailHttp").replace("{status}", String(r.status)).replace("{body}", body.slice(0, 120))}`);
           } else {
             const entry = await r.json();
             try {
@@ -2271,21 +2296,21 @@ function App() {
                 } catch {}
               }
             } catch (e: any) {
-              summary.push(`⚠ ${f.name} (盾牌着装纠偏失败: ${e?.message || String(e)})`);
+              summary.push(`⚠ ${f.name} ${T("ccShieldReconcileFail").replace("{err}", e?.message || String(e))}`);
             }
-            summary.push(`✓ ${f.name} → 新卡 "${entry.name}"`);
+            summary.push(`✓ ${f.name} → ${T("ccNewCardArrow").replace("{name}", entry.name)}`);
           }
         } catch (e: any) {
-          summary.push(`✕ ${f.name} (xlsx 上传失败: ${e?.message || String(e)})`);
+          summary.push(`✕ ${f.name} ${T("ccXlsxFail").replace("{err}", e?.message || String(e))}`);
         }
       } else {
-        summary.push(`✕ ${f.name} (不支持的扩展名 — 仅支持 .json / .xlsx)`);
+        summary.push(`✕ ${f.name} ${T("ccUnsupportedExt")}`);
       }
     }
 
     window.alert(
-      `导入结果（${files.length} 个文件）：\n\n${summary.join("\n")}` +
-      `\n\n（其他客户端会自动刷新已存在的卡片；新建的卡片需要他们刷新一下面板列表。）`,
+      `${T("ccImportResultHead").replace("{n}", String(files.length))}\n\n${summary.join("\n")}` +
+      `\n\n${T("ccImportResultNote")}`,
     );
   }, [roomId, cardId]);
 
@@ -2322,7 +2347,7 @@ function App() {
     return <div class="cc-error cc-translucent">{error}</div>;
   }
   if (!data) {
-    return <div class="cc-loading cc-translucent">加载角色卡…</div>;
+    return <div class="cc-loading cc-translucent">{T("ccLoadingCard")}</div>;
   }
 
   return (
@@ -2341,7 +2366,7 @@ function App() {
           if (savingEdits || !data) return;
           setSavingEdits(true);
           try {
-            const result = await applyJsonObject(data, "已保存的编辑");
+            const result = await applyJsonObject(data, T("ccSavedEdit"));
             if (!result.startsWith("✓")) {
               window.alert(result);
             }
@@ -2360,9 +2385,9 @@ function App() {
             try {
               parsed = JSON.parse(text);
             } catch (e: any) {
-              return `✕ JSON 解析失败：${e?.message || String(e)}`;
+              return T("ccJsonParseFailColon").replace("{err}", e?.message || String(e));
             }
-            const result = await applyJsonObject(parsed, "粘贴文本");
+            const result = await applyJsonObject(parsed, T("ccPasteSource"));
             // Close on success, keep open on warning/error so user sees msg.
             if (result.startsWith("✓")) {
               setPasteOpen(false);
@@ -2379,12 +2404,12 @@ function App() {
           1100 px breakpoint, where the right-sidebar tab list takes
           over. Both renderers share the same setTab handler. */}
       <div class="cc-tabs cc-tabs-top">
-        {TABS.map((t) => (
+        {TABS.map((tb) => (
           <button
-            class={`cc-tab ${tab === t.key ? "is-on" : ""}`}
-            onClick={() => setTab(t.key)}
-            title={t.label}>
-            {t.label}
+            class={`cc-tab ${tab === tb.key ? "is-on" : ""}`}
+            onClick={() => setTab(tb.key)}
+            title={T(tb.labelKey)}>
+            {T(tb.labelKey)}
           </button>
         ))}
       </div>
@@ -2399,13 +2424,13 @@ function App() {
         <div class="cc-main">
           {renderTabSection(tab, data)}
         </div>
-        <nav class="cc-tabs-side" aria-label="角色卡标签">
-          {TABS.map((t) => (
+        <nav class="cc-tabs-side" aria-label={T("ccTabsAria")}>
+          {TABS.map((tb) => (
             <button
-              class={`cc-tab cc-tab-side ${tab === t.key ? "is-on" : ""}`}
-              onClick={() => setTab(t.key)}
-              title={t.label}>
-              {t.label}
+              class={`cc-tab cc-tab-side ${tab === tb.key ? "is-on" : ""}`}
+              onClick={() => setTab(tb.key)}
+              title={T(tb.labelKey)}>
+              {T(tb.labelKey)}
             </button>
           ))}
         </nav>

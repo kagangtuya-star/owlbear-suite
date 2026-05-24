@@ -10,6 +10,7 @@
 // (vision/index.ts watches scene.items.onChange and re-renders).
 
 import OBR from "@owlbear-rodeo/sdk";
+import { getLocalLang } from "../../../state";
 import {
   LIGHT_KEY,
   DEFAULT_LIGHT_FALLOFF,
@@ -17,6 +18,17 @@ import {
   DEFAULT_LIGHT_RADIUS_CELLS,
   type LightConfig,
 } from "./types";
+
+// Dev-only embed; per-client language read once at load. Static HTML
+// chrome carries data-en / data-en-title attrs translated here at boot.
+const en = getLocalLang() === "en";
+if (en) {
+  document.title = "Light settings · fullFog";
+  document.querySelectorAll<HTMLElement>("[data-en]").forEach((el) => { el.textContent = el.dataset.en!; });
+  document.querySelectorAll<HTMLElement>("[data-en-title]").forEach((el) => { el.title = el.dataset.enTitle!; });
+}
+// Unit suffix for the radius readout ("6 格" / "6 cells").
+const CELL_UNIT = en ? " cells" : " 格";
 
 const radiusEl = document.getElementById("radius") as HTMLInputElement;
 const radiusValEl = document.getElementById("radius-val") as HTMLSpanElement;
@@ -47,7 +59,7 @@ function applyUI(cfg: LightConfig): void {
   // intuitive editing; the underlying metadata stays in pixels.
   const cells = Math.round(pxToCells(cfg.attenuationRadius) * 2) / 2;
   radiusEl.value = String(cells);
-  radiusValEl.textContent = `${cells} 格`;
+  radiusValEl.textContent = cells + CELL_UNIT;
   sourceEl.value = String(cfg.sourceRadius);
   sourceValEl.textContent = `${cfg.sourceRadius} px`;
   falloffEl.value = String(cfg.falloff);
@@ -64,14 +76,14 @@ async function load(): Promise<void> {
     itemId = null;
   }
   if (!itemId) {
-    titleEl.textContent = "未选中目标";
+    titleEl.textContent = en ? "No target selected" : "未选中目标";
     return;
   }
   try { dpi = await OBR.scene.grid.getDpi(); } catch {}
   try {
     const items = await OBR.scene.items.getItems([itemId]);
     if (items.length === 0) {
-      titleEl.textContent = "未找到目标 token";
+      titleEl.textContent = en ? "Target token not found" : "未找到目标 token";
       return;
     }
     const it = items[0] as any;
@@ -81,7 +93,7 @@ async function load(): Promise<void> {
       falloff: DEFAULT_LIGHT_FALLOFF,
     };
     applyUI(cfg);
-    titleEl.textContent = `光源设置 · ${it.name ?? "(未命名)"}`;
+    titleEl.textContent = (en ? "Light settings · " : "光源设置 · ") + (it.name ?? (en ? "(unnamed)" : "(未命名)"));
   } catch (e) {
     console.error("[fullFog/light-edit] load failed", e);
   }
@@ -111,7 +123,7 @@ function scheduleWrite(): void {
 }
 
 radiusEl.addEventListener("input", () => {
-  radiusValEl.textContent = `${radiusEl.value} 格`;
+  radiusValEl.textContent = radiusEl.value + CELL_UNIT;
   scheduleWrite();
 });
 sourceEl.addEventListener("input", () => {
@@ -133,7 +145,7 @@ removeBtn.addEventListener("click", async () => {
     // Removing the metadata makes the "Light Settings" filter no
     // longer match → context menu hides this embed automatically on
     // the next open. No need to manually close anything.
-    titleEl.textContent = "光源已移除";
+    titleEl.textContent = en ? "Light removed" : "光源已移除";
   } catch (e) {
     console.error("[fullFog/light-edit] remove failed", e);
   }

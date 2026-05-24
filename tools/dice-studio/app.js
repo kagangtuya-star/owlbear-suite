@@ -12,6 +12,12 @@
 // chips and the on-canvas guide both render from these.
 
 import { initDraw } from "../draw-kit/draw.js";
+import { t, applyI18n, mountLangToggle } from "./i18n.js";
+
+// Translate static chrome + inject the ZH/EN toggle as soon as the module
+// runs (deferred, so the DOM is already parsed).
+applyI18n();
+mountLangToggle();
 
 // --- die catalogue ---------------------------------------------------------
 const DICE = [
@@ -103,17 +109,17 @@ function drawGuide(ctx, w, h) {
   // centre crosshair — helps line up symmetric numerals on the redraw.
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
-  const cx = w / 2, cy = h / 2, t = w * 0.035;
+  const cx = w / 2, cy = h / 2, xh = w * 0.035;
   ctx.beginPath();
-  ctx.moveTo(cx, cy - t); ctx.lineTo(cx, cy + t);
-  ctx.moveTo(cx - t, cy); ctx.lineTo(cx + t, cy);
+  ctx.moveTo(cx, cy - xh); ctx.lineTo(cx, cy + xh);
+  ctx.moveTo(cx - xh, cy); ctx.lineTo(cx + xh, cy);
   ctx.stroke();
   // label
   ctx.fillStyle = "rgba(93,173,226,0.55)";
   ctx.font = `700 ${Math.round(w * 0.045)}px -apple-system,"Segoe UI",sans-serif`;
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(`${currentDie.label} · 模板参考`, w * 0.04, h * 0.035);
+  ctx.fillText(t("dsTplLabel", { label: currentDie.label }), w * 0.04, h * 0.035);
 }
 function applyGuide() {
   if (!drawkit) return;
@@ -126,7 +132,7 @@ sizeSelect.addEventListener("change", () => {
   const s = parseInt(sizeSelect.value, 10) || 512;
   drawkit.resize(s, s);   // resize wipes the board + re-renders the guide
   applyGuide();
-  toast(`画布已重设为 ${s} × ${s}（已清空）`);
+  toast(t("dsToastResized", { s }));
 });
 
 // --- export ----------------------------------------------------------------
@@ -138,7 +144,7 @@ downloadBtn.addEventListener("click", () => {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  toast("已下载 PNG", "ok");
+  toast(t("dsToastDownloaded"), "ok");
 });
 
 // 2026-05-15 — template-PNG download. Renders the current die's
@@ -165,7 +171,7 @@ if (downloadTemplateBtn) {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    toast(`已下载 ${currentDie.label} 模板图（${size}×${size}）`, "ok");
+    toast(t("dsToastTplDownloaded", { label: currentDie.label, size }), "ok");
   });
 }
 
@@ -178,21 +184,21 @@ function loadSaved() {
 }
 function writeSaved(arr) {
   try { localStorage.setItem(LS_SAVED, JSON.stringify(arr)); return true; }
-  catch { toast("保存失败：浏览器本地存储已满", "err"); return false; }
+  catch { toast(t("dsToastSaveFull"), "err"); return false; }
 }
 function renderGallery() {
   const arr = loadSaved();
   if (!arr.length) {
-    diceGallery.innerHTML = `<div class="gallery-empty">还没有保存的骰面。<br>画好后点画板上的「保存」。</div>`;
+    diceGallery.innerHTML = `<div class="gallery-empty">${t("dsGalleryEmpty")}</div>`;
     return;
   }
   diceGallery.innerHTML = arr.map((d) => `
     <div class="dice-item" data-id="${esc(d.id)}" title="${esc(d.name)}">
       <img src="${d.url}" alt="${esc(d.name)}">
       <div class="dice-item-btns">
-        <button class="di-btn" data-act="load" title="载入画板继续编辑">✎</button>
-        <button class="di-btn" data-act="dl" title="下载 PNG">⬇</button>
-        <button class="di-btn del" data-act="del" title="删除">✕</button>
+        <button class="di-btn" data-act="load" title="${esc(t("dsGalLoad"))}">✎</button>
+        <button class="di-btn" data-act="dl" title="${esc(t("dsGalDownload"))}">⬇</button>
+        <button class="di-btn del" data-act="del" title="${esc(t("dsGalDelete"))}">✕</button>
       </div>
     </div>`).join("");
 }
@@ -216,7 +222,7 @@ diceGallery.addEventListener("click", (e) => {
     a.remove();
   } else if (act === "load") {
     drawkit.loadDataUrl(d.url);
-    toast(`「${d.name}」已载入画板`, "ok");
+    toast(t("dsToastLoaded", { name: d.name }), "ok");
   }
 });
 
@@ -228,14 +234,14 @@ drawkit = initDraw({
   mount: document.getElementById("drawMount"),
   width: 512,
   height: 512,
-  saveLabel: "💾 保存到「我的骰面」",
+  saveLabel: t("dsSaveLabel"),
   onSave: (url) => {
     const arr = loadSaved();
-    const name = `${currentDie.id} 骰面 ${arr.length + 1}`;
+    const name = t("dsFaceName", { id: currentDie.id, n: arr.length + 1 });
     arr.push({ id: "x" + Date.now().toString(36), name, url, die: currentDie.id });
     if (writeSaved(arr)) {
       renderGallery();
-      toast(`已保存「${name}」`, "ok");
+      toast(t("dsToastSaved", { name }), "ok");
     }
   },
 });

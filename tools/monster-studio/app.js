@@ -8,17 +8,25 @@
 // bestiary monster-info popover).
 
 import { renderStatBlock, flattenEntries } from "./statblock.js";
+import { LANG, t, applyI18n, mountLangToggle } from "./i18n.js";
+
+applyI18n();
+mountLangToggle();
 
 // ---- constants -------------------------------------------------------------
 const ABIL_ORDER = ["str", "dex", "con", "int", "wis", "cha"];
-const ABIL_CN = { str: "力量", dex: "敏捷", con: "体质", int: "智力", wis: "感知", cha: "魅力" };
+const ABIL_LABELS = {
+  zh: { str: "力量", dex: "敏捷", con: "体质", int: "智力", wis: "感知", cha: "魅力" },
+  en: { str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA" },
+};
+const ABIL_CN = ABIL_LABELS[LANG];
 const ARRAY_FIELDS = ["senses", "languages", "resist", "immune", "vulnerable", "conditionImmune"];
 const SECTIONS = [
-  { key: "trait",     label: "✦ 特性 trait",        cls: "trait" },
-  { key: "action",    label: "⚔ 动作 action",       cls: "action" },
-  { key: "bonus",     label: "⚡ 附赠动作 bonus",    cls: "bonus" },
-  { key: "reaction",  label: "🛡 反应 reaction",     cls: "reaction" },
-  { key: "legendary", label: "★ 传说动作 legendary", cls: "legendary" },
+  { key: "trait",     labelKey: "secTrait",     cls: "trait" },
+  { key: "action",    labelKey: "secAction",    cls: "action" },
+  { key: "bonus",     labelKey: "secBonus",     cls: "bonus" },
+  { key: "reaction",  labelKey: "secReaction",  cls: "reaction" },
+  { key: "legendary", labelKey: "secLegendary", cls: "legendary" },
 ];
 
 // ---- DOM refs --------------------------------------------------------------
@@ -63,17 +71,17 @@ function setStatus(msg, cls) {
 function parseDoc(text) {
   const data = JSON.parse(text);
   if (data && typeof data === "object" && !Array.isArray(data) && Array.isArray(data.monster)) {
-    if (data.monster.length === 0) throw new Error("monster 数组为空");
+    if (data.monster.length === 0) throw new Error(t("msErrMonsterEmpty"));
     return { kind: "wrapped", doc: data, monsters: data.monster };
   }
   if (Array.isArray(data)) {
-    if (data.length === 0) throw new Error("数组为空");
+    if (data.length === 0) throw new Error(t("msErrArrayEmpty"));
     return { kind: "array", doc: data, monsters: data };
   }
   if (data && typeof data === "object") {
     return { kind: "single", doc: data, monsters: [data] };
   }
-  throw new Error("无法识别的 JSON 结构");
+  throw new Error(t("msErrBadShape"));
 }
 function serializeDoc() {
   return JSON.stringify(state.doc, null, 2);
@@ -263,7 +271,7 @@ function renderPicker() {
   if (state.monsters.length > 1) {
     monsterPicker.hidden = false;
     monsterSelect.innerHTML = state.monsters
-      .map((m, i) => `<option value="${i}">${i + 1}. ${esc(m.name || m.ENG_name || "未命名")}</option>`)
+      .map((m, i) => `<option value="${i}">${i + 1}. ${esc(m.name || m.ENG_name || t("msUnnamed"))}</option>`)
       .join("");
     monsterSelect.value = String(state.activeIndex);
   } else {
@@ -297,7 +305,7 @@ function renderAbilGrid() {
         <span class="ac-mod" data-mod="${k}">${fmtMod(abilMod(score))}</span>
       </div>
       <div class="ac-row save-row">
-        <span class="ac-tag">豁免</span>
+        <span class="ac-tag">${t("sbSave")}</span>
         <input type="text" data-save="${k}" value="${esc(saveRaw)}" placeholder="—">
       </div>
     </div>`;
@@ -312,19 +320,19 @@ function renderSections() {
       const text = entriesToText(entry && entry.entries);
       return `<div class="sect-row" data-sect="${s.key}" data-idx="${i}">
         <div class="sect-row-top">
-          <input class="sr-name" type="text" value="${esc(name)}" placeholder="名称">
-          <button class="sr-del" title="删除" aria-label="删除">✕</button>
+          <input class="sr-name" type="text" value="${esc(name)}" placeholder="${esc(t("msEntryNamePh"))}">
+          <button class="sr-del" title="${esc(t("msEntryDel"))}" aria-label="${esc(t("msEntryDel"))}">✕</button>
         </div>
-        <textarea class="sr-text" placeholder="描述（每段一行；保留 {@tag ...} 写法）">${esc(text)}</textarea>
+        <textarea class="sr-text" placeholder="${esc(t("msEntryDescPh"))}">${esc(text)}</textarea>
       </div>`;
     }).join("");
     return `<div class="sect-block">
       <div class="sect-block-head">
-        <span class="sect-block-title ${s.cls}">${s.label}</span>
-        <span class="sect-block-count">${list.length} 条</span>
+        <span class="sect-block-title ${s.cls}">${t(s.labelKey)}</span>
+        <span class="sect-block-count">${t("msCountSuffix", { n: list.length })}</span>
       </div>
       <div class="sect-rows">${rows}</div>
-      <button class="sect-add" data-add="${s.key}">+ 添加条目</button>
+      <button class="sect-add" data-add="${s.key}">${t("msAddEntry")}</button>
     </div>`;
   }).join("");
 }
@@ -336,7 +344,7 @@ function renderPreview() {
   const m = activeMonster();
   previewMount.innerHTML = m
     ? renderStatBlock(m)
-    : `<div class="sb"><div class="sb-empty">导入或粘贴怪物 JSON 后<br>这里会实时渲染怪物面板。</div></div>`;
+    : `<div class="sb"><div class="sb-empty">${t("msPreviewEmpty")}</div></div>`;
 }
 
 // ---- load / export ---------------------------------------------------------
@@ -345,7 +353,7 @@ function loadDoc(text, { skipJsonArea = false } = {}) {
   try {
     parsed = parseDoc(text);
   } catch (e) {
-    setStatus("JSON 解析失败：" + e.message, "err");
+    setStatus(t("msStatusParseFail", { err: e.message }), "err");
     jsonArea.classList.add("err");
     return false;
   }
@@ -361,13 +369,13 @@ function loadDoc(text, { skipJsonArea = false } = {}) {
   if (!skipJsonArea) renderJson();
   renderPreview();
   const kindLabel = parsed.kind === "wrapped" ? "{monster:[…]}"
-    : parsed.kind === "array" ? "[…]" : "单个对象";
-  setStatus(`已加载 ${state.monsters.length} 个怪物（${kindLabel}）。`, "ok");
+    : parsed.kind === "array" ? t("msKindArray") : t("msKindObject");
+  setStatus(t("msStatusLoaded", { n: state.monsters.length, kind: kindLabel }), "ok");
   return true;
 }
 function doExport() {
   if (!state.doc) {
-    setStatus("还没有可导出的数据。", "err");
+    setStatus(t("msStatusNoExport"), "err");
     return;
   }
   const text = serializeDoc();
@@ -382,13 +390,13 @@ function doExport() {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-  setStatus("已导出 JSON 文件。", "ok");
+  setStatus(t("msStatusExported"), "ok");
 }
 
 // ---- blank / sample data ---------------------------------------------------
 function blankMonster() {
   return {
-    name: "新怪物",
+    name: t("msNewMonster"),
     ENG_name: "",
     source: "",
     size: "M",
@@ -403,38 +411,122 @@ function blankMonster() {
   };
 }
 function sampleDoc() {
+  const zh = LANG === "zh";
   return {
-    monster: [{
-      name: "哥布林头目",
-      ENG_name: "Goblin Boss",
-      source: "MM",
-      size: ["S"],
-      type: { type: "humanoid", tags: ["goblinoid"] },
-      alignment: "中立邪恶",
-      ac: [{ ac: 17, from: ["链甲", "盾牌"] }],
-      hp: { average: 21, formula: "6d6" },
-      speed: { walk: 30 },
-      str: 10, dex: 14, con: 10, int: 10, wis: 8, cha: 10,
-      save: { dex: "+4" },
-      skill: { stealth: "+6" },
-      senses: ["黑暗视觉 60 尺"],
-      passive: 9,
-      languages: ["通用语", "地精语"],
-      cr: "1",
-      trait: [
-        { name: "鬼祟逃窜", entries: ["哥布林头目可以在每个回合用附赠动作脱离或躲藏。"] },
-      ],
-      action: [
-        { name: "多重攻击", entries: ["哥布林头目发动两次弯刀攻击，第二次攻击带有劣势。"] },
-        { name: "弯刀", entries: ["近战武器攻击：{@hit 4} 命中，触及 5 尺，单一目标。命中：{@damage 1d6+2} 点挥砍伤害。"] },
-        { name: "标枪", entries: ["武器攻击：{@hit 4} 命中，触及 5 尺或射程 30/120 尺，单一目标。命中：{@damage 1d6+2} 点穿刺伤害。"] },
-      ],
-      bonus: [],
-      reaction: [
-        { name: "顶替", entries: ["当一个 5 尺内的非头目盟友被攻击时，哥布林头目可让该盟友与自己交换位置并代其受击。"] },
-      ],
-      legendary: [],
-    }],
+    monster: [
+      // Lightweight example: every section that low-CR monsters
+      // typically have (trait / action / reaction), nothing fancy.
+      {
+        name: zh ? "哥布林头目" : "Goblin Boss",
+        ENG_name: "Goblin Boss",
+        source: "MM",
+        size: ["S"],
+        type: { type: "humanoid", tags: ["goblinoid"] },
+        alignment: zh ? "中立邪恶" : "Neutral Evil",
+        ac: [{ ac: 17, from: zh ? ["链甲", "盾牌"] : ["chain shirt", "shield"] }],
+        hp: { average: 21, formula: "6d6" },
+        speed: { walk: 30 },
+        str: 10, dex: 14, con: 10, int: 10, wis: 8, cha: 10,
+        save: { dex: "+4" },
+        skill: { stealth: "+6" },
+        senses: zh ? ["黑暗视觉 60 尺"] : ["darkvision 60 ft."],
+        passive: 9,
+        languages: zh ? ["通用语", "地精语"] : ["Common", "Goblin"],
+        cr: "1",
+        trait: [
+          zh
+            ? { name: "鬼祟逃窜", entries: ["哥布林头目可以在每个回合用附赠动作脱离或躲藏。"] }
+            : { name: "Nimble Escape", entries: ["The goblin can take the Disengage or Hide action as a bonus action on each of its turns."] },
+        ],
+        action: [
+          zh
+            ? { name: "多重攻击", entries: ["哥布林头目发动两次弯刀攻击，第二次攻击带有劣势。"] }
+            : { name: "Multiattack", entries: ["The goblin makes two attacks with its scimitar. The second attack has disadvantage."] },
+          zh
+            ? { name: "弯刀", entries: ["近战武器攻击：{@hit 4} 命中，触及 5 尺，单一目标。命中：{@damage 1d6+2} 点挥砍伤害。"] }
+            : { name: "Scimitar", entries: ["Melee Weapon Attack: {@hit 4} to hit, reach 5 ft., one target. Hit: {@damage 1d6+2} slashing damage."] },
+          zh
+            ? { name: "标枪", entries: ["武器攻击：{@hit 4} 命中，触及 5 尺或射程 30/120 尺，单一目标。命中：{@damage 1d6+2} 点穿刺伤害。"] }
+            : { name: "Javelin", entries: ["Melee or Ranged Weapon Attack: {@hit 4} to hit, reach 5 ft. or range 30/120 ft., one target. Hit: {@damage 1d6+2} piercing damage."] },
+        ],
+        bonus: [],
+        reaction: [
+          zh
+            ? { name: "顶替", entries: ["当一个 5 尺内的非头目盟友被攻击时，哥布林头目可让该盟友与自己交换位置并代其受击。"] }
+            : { name: "Redirect Attack", entries: ["When a non-boss ally within 5 ft. is attacked, the Goblin Boss can swap places with that ally and take the hit instead."] },
+        ],
+        legendary: [],
+      },
+      // Full-featured example: every section type populated (trait
+      // with spellcasting block, action multiattack, bonus action,
+      // reaction, legendary actions). Pick the Lich because it's the
+      // canonical "has-it-all" stat block.
+      {
+        name: zh ? "巫妖" : "Lich",
+        ENG_name: "Lich",
+        source: "MM",
+        size: ["M"],
+        type: { type: "undead" },
+        alignment: zh ? "任意邪恶阵营" : "Any Evil Alignment",
+        ac: [{ ac: 17, from: [zh ? "天生护甲" : "natural armor"] }],
+        hp: { average: 135, formula: "18d8 + 54" },
+        speed: { walk: 30 },
+        str: 11, dex: 16, con: 16, int: 20, wis: 14, cha: 16,
+        save: { con: "+10", int: "+12", wis: "+9" },
+        skill: { arcana: "+19", history: "+12", insight: "+9", perception: "+9" },
+        resist: zh ? ["寒冷", "闪电", "黯蚀"] : ["cold", "lightning", "necrotic"],
+        immune: zh ? ["毒素", "钝击/穿刺/挥砍（非魔法武器造成）"] : ["poison", "bludgeoning, piercing and slashing from nonmagical attacks"],
+        conditionImmune: zh ? ["魅惑", "力竭", "恐惧", "麻痹", "中毒"] : ["charmed", "exhaustion", "frightened", "paralyzed", "poisoned"],
+        senses: zh ? ["真实视觉 120 尺"] : ["truesight 120 ft."],
+        passive: 19,
+        languages: zh ? ["通用语 + 至多五种其它语言"] : ["Common plus up to five other languages"],
+        cr: "21",
+        trait: [
+          zh
+            ? { name: "传奇反抗（每日3次）", entries: ["若巫妖一次豁免检定失败，可改判其成功。"] }
+            : { name: "Legendary Resistance (3/Day)", entries: ["If the lich fails a saving throw, it can choose to succeed instead."] },
+          zh
+            ? { name: "法术施放", entries: ["巫妖是 18 级法师。其法术施放属性为智力（豁免 DC 20，法术攻击 {@hit 12} 命中）。它已准备以下法师法术：", "戏法（随意）：{@spell 法师之手}, {@spell 摩苓加之手}, {@spell 法术防护}, {@spell 心灵震击}", "1环（每日4次）：{@spell 法师护甲}, {@spell 侦测魔法}, {@spell 魔法飞弹}, {@spell 护盾}", "2环（每日3次）：{@spell 黑暗术}, {@spell 模糊术}, {@spell 失能术}, {@spell 镜影术}", "3环（每日3次）：{@spell 反制法术}, {@spell 闪电术}, {@spell 加速术}", "4环（每日3次）：{@spell 喷涌冰雹}, {@spell 次元门}", "5环（每日3次）：{@spell 操控气候}, {@spell 凡人圈套}", "6环（每日1次）：{@spell 全域防护}, {@spell 解离射线}", "7环（每日1次）：{@spell 手指死亡}, {@spell 传送术}", "8环（每日1次）：{@spell 心智控制}, {@spell 力场领域}", "9环（每日1次）：{@spell 灵魂禁锢}"] }
+            : { name: "Spellcasting", entries: ["The lich is an 18th-level spellcaster. Its spellcasting ability is Intelligence (spell save DC 20, {@hit 12} to hit with spell attacks). It has the following wizard spells prepared:", "Cantrips (at will): {@spell mage hand}, {@spell prestidigitation}, {@spell ray of frost}", "1st level (4 slots): {@spell detect magic}, {@spell magic missile}, {@spell shield}, {@spell thunderwave}", "2nd level (3 slots): {@spell detect thoughts}, {@spell invisibility}, {@spell acid arrow}, {@spell mirror image}", "3rd level (3 slots): {@spell animate dead}, {@spell counterspell}, {@spell dispel magic}, {@spell fireball}", "4th level (3 slots): {@spell blight}, {@spell dimension door}", "5th level (3 slots): {@spell cloudkill}, {@spell scrying}", "6th level (1 slot): {@spell disintegrate}, {@spell globe of invulnerability}", "7th level (1 slot): {@spell finger of death}, {@spell plane shift}", "8th level (1 slot): {@spell dominate monster}, {@spell power word stun}", "9th level (1 slot): {@spell power word kill}"] }
+,
+          zh
+            ? { name: "回光返照", entries: ["持有它命匣的巫妖在身死后 1d10 天内于命匣 5 尺内重新成形，获得满血。"] }
+            : { name: "Rejuvenation", entries: ["If it has a phylactery, a destroyed lich gains a new body in 1d10 days, regaining all its hit points within 5 ft. of the phylactery."] },
+        ],
+        action: [
+          zh
+            ? { name: "瘫痪之触", entries: ["近战法术攻击：{@hit 12} 命中，触及 5 尺，单一生物。命中：{@damage 3d6} 点黯蚀伤害；目标须通过 DC 18 体质豁免，否则陷入麻痹状态 1 分钟。该生物可于每回合结束时重作豁免，成功即结束效果。"] }
+            : { name: "Paralyzing Touch", entries: ["Melee Spell Attack: {@hit 12} to hit, reach 5 ft., one creature. Hit: {@damage 3d6} necrotic damage. The target must succeed on a DC 18 Constitution saving throw or be paralyzed for 1 minute. The target can repeat the saving throw at the end of each of its turns, ending the effect on itself on a success."] },
+        ],
+        bonus: [
+          zh
+            ? { name: "戏法施放", entries: ["巫妖以附赠动作施放一个戏法。"] }
+            : { name: "Cantrip Cast", entries: ["The lich casts a cantrip as a bonus action."] },
+        ],
+        reaction: [
+          zh
+            ? { name: "反制法术", entries: ["当 60 尺内某生物正在施放一个法术时，巫妖作出反应试图反制之；具体效果同 {@spell 反制法术} 法术。"] }
+            : { name: "Counterspell", entries: ["When a creature within 60 ft. casts a spell, the lich attempts to interrupt it as per the {@spell counterspell} spell."] },
+        ],
+        legendary: [
+          zh
+            ? { name: "传奇动作", entries: ["巫妖可施展以下 3 个传奇动作选项之一。每回合只能用一个传奇动作，且只能在其他生物的回合结束后。巫妖在其回合开始时恢复所用的传奇动作。"] }
+            : { name: "Legendary Actions", entries: ["The lich can take 3 legendary actions, choosing from the options below. Only one legendary action option can be used at a time and only at the end of another creature's turn. The lich regains spent legendary actions at the start of its turn."] },
+          zh
+            ? { name: "戏法", entries: ["巫妖施放一个戏法。"] }
+            : { name: "Cantrip", entries: ["The lich casts a cantrip."] },
+          zh
+            ? { name: "瘫痪之触（消耗 2 个动作）", entries: ["巫妖使用其瘫痪之触。"] }
+            : { name: "Paralyzing Touch (Costs 2 Actions)", entries: ["The lich uses its Paralyzing Touch."] },
+          zh
+            ? { name: "破灭凝视（消耗 2 个动作）", entries: ["巫妖凝视 10 尺内某生物。该生物须通过 DC 18 感知豁免，否则该生物受 {@damage 4d10} 点黯蚀伤害，并陷入恐惧状态至该生物的下回合结束。"] }
+            : { name: "Frightening Gaze (Costs 2 Actions)", entries: ["The lich fixes its gaze on one creature within 10 ft. for 1 round. The target must succeed on a DC 18 Wisdom saving throw or take {@damage 4d10} necrotic damage and be frightened until the end of the lich's next turn."] },
+          zh
+            ? { name: "扰乱生机（消耗 3 个动作）", entries: ["20 尺内每个非不死生物须通过 DC 18 体质豁免，承受 {@damage 6d6} 点黯蚀伤害（豁免成功减半）。"] }
+            : { name: "Disrupt Life (Costs 3 Actions)", entries: ["Each non-undead creature within 20 ft. must make a DC 18 Constitution saving throw, taking {@damage 6d6} necrotic damage on a failed save, or half as much on a successful one."] },
+        ],
+      },
+    ],
   };
 }
 
@@ -512,7 +604,7 @@ sectionsHost.addEventListener("click", (e) => {
   const addKey = e.target.dataset && e.target.dataset.add;
   if (addKey) {
     if (!Array.isArray(m[addKey])) m[addKey] = [];
-    m[addKey].push({ name: "新条目", entries: [] });
+    m[addKey].push({ name: t("msNewEntry"), entries: [] });
     renderSections();
     renderJson();
     renderPreview();

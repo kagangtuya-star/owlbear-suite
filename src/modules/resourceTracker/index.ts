@@ -12,6 +12,7 @@
 
 import OBR from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../asset-base";
+import { getLocalLang } from "../../state";
 import { addResource, deleteResource, updateResource } from "./storage";
 import { Resource, PLUGIN_ID } from "./types";
 
@@ -157,13 +158,14 @@ export async function setupResourceTracker(): Promise<void> {
   // tool acts as a button — toggling the panel without becoming the
   // active tool. The page broadcasts BC_PANEL_CLOSED on its own
   // X / Esc close so our cached `panelOpen` flag stays in sync.
+  const en = getLocalLang() === "en";
   let role: "GM" | "PLAYER" = "PLAYER";
   try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
   if (role === "GM") {
     try {
       await OBR.tool.create({
         id: PANEL_TOOL_ID,
-        icons: [{ icon: PANEL_ICON_URL, label: "资源追踪" }],
+        icons: [{ icon: PANEL_ICON_URL, label: en ? "Resource tracker" : "资源追踪" }],
         onClick: async () => {
           await toggleResourcePanel();
           return false;

@@ -19,6 +19,7 @@
 //   mask -> traceContours -> simplifyDP -> imagePxToWorld -> buildPath
 
 import OBR, { isImage, isPath, type Item } from "@owlbear-rodeo/sdk";
+import { getLocalLang } from "../../state";
 import { MODAL_ID, FOG_PATH_KEY, DEFAULT_PREFS, LS_PREFS } from "./types";
 import type { ToolId, EditorPrefs, AlgorithmId, Vec2, ShapeToolId, ShapeMode } from "./types";
 import { toGray, thresholdMask, gaussBlur3, gaussBlur5 } from "./algorithms/grayscale";
@@ -54,6 +55,16 @@ import { History } from "./editor/history";
 
 const params = new URLSearchParams(location.search);
 const mapItemId = params.get("id") ?? "";
+
+// Dev-only editor; per-client language read once at load. Static HTML
+// chrome carries data-en / data-en-title attrs translated here at boot.
+const en = getLocalLang() === "en";
+if (en) {
+  document.title = "Edit map fog · fullFog";
+  document.querySelectorAll<HTMLElement>("[data-en]").forEach((el) => { el.textContent = el.dataset.en!; });
+  document.querySelectorAll<HTMLElement>("[data-en-title]").forEach((el) => { el.title = el.dataset.enTitle!; });
+  document.querySelectorAll<HTMLOptionElement>("[data-en-opt]").forEach((el) => { el.textContent = el.dataset.enOpt!; });
+}
 
 // --- DOM -------------------------------------------------------------------
 
@@ -163,16 +174,16 @@ function makeOffscreen(w: number, h: number): HTMLCanvasElement | OffscreenCanva
 
 async function loadMap(): Promise<void> {
   if (!mapItemId) {
-    mapMetaEl.textContent = "未传入 map id";
+    mapMetaEl.textContent = en ? "No map id supplied" : "未传入 map id";
     return;
   }
   try {
     const items = await OBR.scene.items.getItems([mapItemId]);
-    if (items.length === 0) { mapMetaEl.textContent = "map item 不存在"; return; }
+    if (items.length === 0) { mapMetaEl.textContent = en ? "map item not found" : "map item 不存在"; return; }
     const it = items[0] as any;
-    if (!isImage(it as Item)) { mapMetaEl.textContent = "目标不是图片 item"; return; }
+    if (!isImage(it as Item)) { mapMetaEl.textContent = en ? "target is not an image item" : "目标不是图片 item"; return; }
     mapItem = it;
-    mapMetaEl.textContent = `${it.name ?? "(未命名)"} · ${it.image.width}×${it.image.height}`;
+    mapMetaEl.textContent = `${it.name ?? (en ? "(unnamed)" : "(未命名)")} · ${it.image.width}×${it.image.height}`;
     mapImage = await fetchBitmap(it.image.url);
     imgW = mapImage.width;
     imgH = mapImage.height;
@@ -201,10 +212,10 @@ async function loadMap(): Promise<void> {
     setStatus();
     rebuildMaskLayer();
     scheduleRedraw();
-    stInfo.textContent = "已加载，开始编辑";
+    stInfo.textContent = en ? "Loaded — start editing" : "已加载，开始编辑";
   } catch (e) {
     console.error("[fullFog] loadMap failed", e);
-    mapMetaEl.textContent = `加载失败：${(e as Error).message}`;
+    mapMetaEl.textContent = (en ? "Load failed: " : "加载失败：") + (e as Error).message;
   }
 }
 
@@ -421,21 +432,35 @@ function rebuildThresholdLayer(): void {
 
 // --- Canvas redraw ---------------------------------------------------------
 
-const TOOL_LABELS: Record<ToolId, string> = {
-  pan: "拖动",
-  brush: "画笔",
-  eraser: "橡皮",
-  lasso: "套索",
-  polygon: "多边",
-  rectangle: "矩形",
-  line: "直线",
-  magicWand: "魔棒",
-  paintBucket: "油漆",
-  picker: "取色",
-};
+const TOOL_LABELS: Record<ToolId, string> = en
+  ? {
+      pan: "Pan",
+      brush: "Brush",
+      eraser: "Eraser",
+      lasso: "Lasso",
+      polygon: "Polygon",
+      rectangle: "Rect",
+      line: "Line",
+      magicWand: "Wand",
+      paintBucket: "Fill",
+      picker: "Pick",
+    }
+  : {
+      pan: "拖动",
+      brush: "画笔",
+      eraser: "橡皮",
+      lasso: "套索",
+      polygon: "多边",
+      rectangle: "矩形",
+      line: "直线",
+      magicWand: "魔棒",
+      paintBucket: "油漆",
+      picker: "取色",
+    };
 
 function currentModeLabel(): string {
   if (!isShapeTool(tool)) return "";
+  if (en) return prefs.toolModes[tool] === "add" ? "·fill" : "·erase";
   return prefs.toolModes[tool] === "add" ? "·填" : "·擦";
 }
 
@@ -786,7 +811,9 @@ function applyAlgorithm(): void {
   updateMaskCount();
   schedulePreviewRefresh();
   scheduleRedraw();
-  stInfo.textContent = `算法 ${prefs.algorithm} 已应用 (${merge ? "合并" : "覆盖"})`;
+  stInfo.textContent = en
+    ? `Algorithm ${prefs.algorithm} applied (${merge ? "merge" : "overwrite"})`
+    : `算法 ${prefs.algorithm} 已应用 (${merge ? "合并" : "覆盖"})`;
 }
 
 function applyRefinement(): void {
@@ -804,7 +831,7 @@ function applyRefinement(): void {
   updateMaskCount();
   schedulePreviewRefresh();
   scheduleRedraw();
-  stInfo.textContent = "清理完成";
+  stInfo.textContent = en ? "Cleanup done" : "清理完成";
 }
 
 // --- Mask stats ------------------------------------------------------------
@@ -867,7 +894,7 @@ function clearMask(): void {
   updateMaskCount();
   schedulePreviewRefresh();
   scheduleRedraw();
-  stInfo.textContent = "已清空 mask";
+  stInfo.textContent = en ? "Mask cleared" : "已清空 mask";
 }
 
 // --- Pointer handling ------------------------------------------------------
@@ -984,7 +1011,7 @@ canvas.addEventListener("pointerdown", (e) => {
       pushUndo();
       if (!imgRGBA) break;
       const n = magicWand(imgRGBA, mask, imgW, imgH, ix, iy, prefs.wandTolerance, true);
-      stInfo.textContent = `魔棒选中 ${n}px`;
+      stInfo.textContent = en ? `Wand selected ${n}px` : `魔棒选中 ${n}px`;
       rebuildMaskLayer();
       updateMaskCount();
       scheduleRedraw();
@@ -994,7 +1021,7 @@ canvas.addEventListener("pointerdown", (e) => {
     case "paintBucket": {
       pushUndo();
       const n = paintBucket(mask, imgW, imgH, ix, iy);
-      stInfo.textContent = `油漆桶填充 ${n}px`;
+      stInfo.textContent = en ? `Bucket filled ${n}px` : `油漆桶填充 ${n}px`;
       rebuildMaskLayer();
       updateMaskCount();
       scheduleRedraw();
@@ -1180,7 +1207,7 @@ function pickColorAt(ix: number, iy: number): void {
   $("cd-color-hex").textContent = hex;
   setAlgorithm("colorDistance");
   thresholdDirty = true;
-  stInfo.textContent = `已取色 ${hex}`;
+  stInfo.textContent = (en ? "Picked color " : "已取色 ") + hex;
   savePrefs();
 }
 
@@ -1188,7 +1215,7 @@ function pickColorAt(ix: number, iy: number): void {
 
 async function save(): Promise<void> {
   if (!mapItem || !mask) return;
-  stInfo.textContent = "毛边整理中…";
+  stInfo.textContent = en ? "Trimming edges…" : "毛边整理中…";
   const t0 = performance.now();
 
   // Pre-output mask smoothing on a TEMP copy. The user's editing
@@ -1208,7 +1235,7 @@ async function save(): Promise<void> {
     smoothMask = m;
   }
 
-  stInfo.textContent = "提取轮廓中…";
+  stInfo.textContent = en ? "Extracting contours…" : "提取轮廓中…";
   const contours = traceContours(smoothMask, imgW, imgH);
   const baseTol = Number(($<HTMLInputElement>("simp")).value) || 0;
 
@@ -1259,11 +1286,15 @@ async function save(): Promise<void> {
   }
   const adaptiveNote =
     tol !== baseTol || iters !== prefs.chaikinIters
-      ? `（自适应简化 tol=${tol.toFixed(1)} 切角=${iters}）`
+      ? (en
+          ? ` (auto-simplified tol=${tol.toFixed(1)} corner=${iters})`
+          : `（自适应简化 tol=${tol.toFixed(1)} 切角=${iters}）`)
       : "";
 
   if (processed.length === 0) {
-    stInfo.textContent = "没有可保存的轮廓 — 先涂点墙再保存";
+    stInfo.textContent = en
+      ? "No contours to save — paint some walls first"
+      : "没有可保存的轮廓 — 先涂点墙再保存";
     return;
   }
 
@@ -1368,7 +1399,7 @@ async function save(): Promise<void> {
     : [];
 
   if (sharedItems.length === 0 && localItems.length === 0) {
-    stInfo.textContent = "构建输出失败";
+    stInfo.textContent = en ? "Failed to build output" : "构建输出失败";
     return;
   }
 
@@ -1385,8 +1416,9 @@ async function save(): Promise<void> {
       await OBR.scene.local.addItems(chunk);
     }
     const t1 = performance.now();
-    stInfo.textContent =
-      `✅ 保存了 ${processed.length} 段 ${totalPts} 个点${adaptiveNote}（${sharedItems.length} 共享 Path + ${localItems.length} 本地 Wall · ${(t1 - t0).toFixed(0)}ms）`;
+    stInfo.textContent = en
+      ? `✅ Saved ${processed.length} segments, ${totalPts} points${adaptiveNote} (${sharedItems.length} shared Path + ${localItems.length} local Wall · ${(t1 - t0).toFixed(0)}ms)`
+      : `✅ 保存了 ${processed.length} 段 ${totalPts} 个点${adaptiveNote}（${sharedItems.length} 共享 Path + ${localItems.length} 本地 Wall · ${(t1 - t0).toFixed(0)}ms）`;
     setTimeout(() => { void OBR.modal.close(MODAL_ID).catch(() => {}); }, 700);
   } catch (e) {
     // OBR rejects with a plain object whose `.message` is undefined.
@@ -1402,7 +1434,7 @@ async function save(): Promise<void> {
         ?? String(e);
     } catch { detail = String(e); }
     console.error("[fullFog] save failed", e, "shared:", sharedItems, "local:", localItems);
-    stInfo.textContent = `❌ 保存失败：${detail}`;
+    stInfo.textContent = (en ? "❌ Save failed: " : "❌ 保存失败：") + detail;
   }
 }
 
@@ -1464,7 +1496,9 @@ function exportMaskJSON(): void {
     URL.revokeObjectURL(url);
     a.remove();
   }, 100);
-  stInfo.textContent = `已导出 mask JSON（${(json.length / 1024).toFixed(1)} KB）`;
+  stInfo.textContent = en
+    ? `Exported mask JSON (${(json.length / 1024).toFixed(1)} KB)`
+    : `已导出 mask JSON（${(json.length / 1024).toFixed(1)} KB）`;
 }
 
 function importMaskJSON(): void {
@@ -1479,12 +1513,16 @@ function importMaskJSON(): void {
       const text = await file.text();
       const data = JSON.parse(text) as ExportedMaskFile;
       if (data.fullFogVersion !== "1") {
-        if (!confirm(`未知的 fullFog 版本 ${data.fullFogVersion}，仍然导入？`)) return;
+        if (!confirm(en
+          ? `Unknown fullFog version ${data.fullFogVersion}. Import anyway?`
+          : `未知的 fullFog 版本 ${data.fullFogVersion}，仍然导入？`)) return;
       }
       if (data.imgW !== imgW || data.imgH !== imgH) {
-        if (!confirm(
-          `JSON 是为 ${data.imgW}×${data.imgH} 的地图导出的，` +
-          `但当前是 ${imgW}×${imgH}。仍然导入？（mask 会被裁剪/拉伸到当前尺寸）`,
+        if (!confirm(en
+          ? `JSON was exported for a ${data.imgW}×${data.imgH} map, ` +
+            `but the current one is ${imgW}×${imgH}. Import anyway? (mask will be cropped/stretched to the current size)`
+          : `JSON 是为 ${data.imgW}×${data.imgH} 的地图导出的，` +
+            `但当前是 ${imgW}×${imgH}。仍然导入？（mask 会被裁剪/拉伸到当前尺寸）`,
         )) return;
       }
       pushUndo();
@@ -1510,10 +1548,10 @@ function importMaskJSON(): void {
       updateMaskCount();
       schedulePreviewRefresh();
       scheduleRedraw();
-      stInfo.textContent = `已导入 mask（${file.name}）`;
+      stInfo.textContent = (en ? "Imported mask (" : "已导入 mask（") + file.name + (en ? ")" : "）");
     } catch (e) {
       console.error("[fullFog] import failed", e);
-      stInfo.textContent = `❌ 导入失败：${(e as Error).message}`;
+      stInfo.textContent = (en ? "❌ Import failed: " : "❌ 导入失败：") + (e as Error).message;
     }
   };
   input.click();
@@ -1551,7 +1589,9 @@ function refreshToolBadges(): void {
     if (isShapeTool(t)) {
       const mode = prefs.toolModes[t];
       b.dataset.mode = mode;
-      b.title = `${TOOL_LABELS[t]}（当前：${mode === "add" ? "填充" : "擦除"}）— 右键此按钮切换填/擦`;
+      b.title = en
+        ? `${TOOL_LABELS[t]} (now: ${mode === "add" ? "fill" : "erase"}) — right-click to toggle fill/erase`
+        : `${TOOL_LABELS[t]}（当前：${mode === "add" ? "填充" : "擦除"}）— 右键此按钮切换填/擦`;
     }
   });
 }
@@ -1735,7 +1775,7 @@ function bindUI(): void {
     scheduleRedraw();
   });
   $("btn-clear").addEventListener("click", () => {
-    if (confirm("确定清空当前 mask？此操作可撤销。")) clearMask();
+    if (confirm(en ? "Clear the current mask? This can be undone." : "确定清空当前 mask？此操作可撤销。")) clearMask();
   });
   $("btn-save").addEventListener("click", () => { void save(); });
   $("btn-cancel").addEventListener("click", () => { void cancel(); });

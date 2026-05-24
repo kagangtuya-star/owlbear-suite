@@ -13,6 +13,10 @@ import { decodeSource } from "./decode.js";
 import { encodeWebm, prewarmEncoder } from "./encoder.js";
 import { ANIMS, ANIM_ORDER, defaultParams } from "./anims.js";
 import { initDraw } from "../draw-kit/draw.js";
+import { t, ta, applyI18n, mountLangToggle } from "./i18n.js";
+
+applyI18n();
+mountLangToggle();
 
 // ============ State ============
 const state = {
@@ -145,7 +149,7 @@ function makeLayer(kind, source, name) {
   const isAnim = kind === "anim";
   return {
     id: ++_layerId,
-    name: name || (isAnim ? "动图" : "图层"),
+    name: name || (isAnim ? t("bfAnimLayer") : t("bfLayer")),
     kind,
     img: isAnim ? null : source.img,
     frames: isAnim ? source.frames : null,
@@ -429,7 +433,7 @@ function layerThumb(layer) {
 }
 function renderLayerList() {
   if (!state.layers.length) {
-    layerList.innerHTML = `<div class="layer-empty">还没有图层。<br>用下方的素材添加第一层。</div>`;
+    layerList.innerHTML = `<div class="layer-empty">${t("bfLayerEmpty")}</div>`;
     return;
   }
   const rows = [];
@@ -438,8 +442,8 @@ function renderLayerList() {
     const sel = layer.id === state.selectedId ? "sel" : "";
     const hid = layer.visible ? "" : "hidden-layer";
     const kindBadge = layer.kind === "anim"
-      ? `<span class="kbadge">动图 ${layer.frames.length}帧</span>`
-      : "静态图";
+      ? `<span class="kbadge">${t("bfBadgeAnim", { n: layer.frames.length })}</span>`
+      : t("bfBadgeStatic");
     rows.push(`<div class="layer-row ${sel} ${hid}" data-id="${layer.id}">
       <img class="layer-thumb" src="${layerThumb(layer)}" alt="">
       <div class="layer-info">
@@ -447,10 +451,10 @@ function renderLayerList() {
         <div class="layer-kind">${kindBadge}</div>
       </div>
       <div class="layer-btns">
-        <button class="lyr-btn" data-act="up" ${i === state.layers.length - 1 ? "disabled" : ""} title="上移">▲</button>
-        <button class="lyr-btn" data-act="down" ${i === 0 ? "disabled" : ""} title="下移">▼</button>
-        <button class="lyr-btn" data-act="vis" title="显示/隐藏">${layer.visible ? "👁" : "⊘"}</button>
-        <button class="lyr-btn del" data-act="del" title="删除">✕</button>
+        <button class="lyr-btn" data-act="up" ${i === state.layers.length - 1 ? "disabled" : ""} title="${esc(t("bfUp"))}">▲</button>
+        <button class="lyr-btn" data-act="down" ${i === 0 ? "disabled" : ""} title="${esc(t("bfDown"))}">▼</button>
+        <button class="lyr-btn" data-act="vis" title="${esc(t("bfToggleVis"))}">${layer.visible ? "👁" : "⊘"}</button>
+        <button class="lyr-btn del" data-act="del" title="${esc(t("bfDelete"))}">✕</button>
       </div>
     </div>`);
   }
@@ -485,65 +489,63 @@ layerList.addEventListener("click", (e) => {
 function renderLayerProps() {
   const layer = selectedLayer();
   if (!layer) {
-    layerProps.innerHTML = `<div class="props-empty">选择一个图层来编辑它的位置、大小和动画。</div>`;
+    layerProps.innerHTML = `<div class="props-empty">${t("bfPropsEmpty")}</div>`;
     return;
   }
   const animDef = ANIMS[layer.anim] || ANIMS.none;
   const paramRows = animDef.params.map((pr) => {
     const v = layer.animParams[pr.key] != null ? layer.animParams[pr.key] : pr.default;
-    return `<label class="param"><span>${pr.label}</span>
+    return `<label class="param"><span>${ta(pr.label)}</span>
       <input type="range" data-ap="${pr.key}" min="${pr.min}" max="${pr.max}" step="${pr.step}" value="${v}">
       <span class="range-val">${fmtParamVal(pr, v)}</span></label>`;
   }).join("");
   const animSpeedRow = layer.kind === "anim"
-    ? `<label class="param"><span>播放速度</span>
+    ? `<label class="param"><span>${t("bfPlaySpeed")}</span>
         <input type="range" data-p="animSpeed" min="0.1" max="4" step="0.1" value="${layer.animSpeed}">
         <span class="range-val">${layer.animSpeed.toFixed(1)}×</span></label>`
     : "";
   const hasParamList = !!paramRows || layer.kind === "anim";
   layerProps.innerHTML = `
-    <div class="props-section">变换</div>
+    <div class="props-section">${t("bfSecTransform")}</div>
     <div class="param-list">
-      <label class="param"><span>名称</span>
+      <label class="param"><span>${t("bfName")}</span>
         <input type="text" data-p="name" value="${esc(layer.name)}" style="flex:1;width:auto"></label>
-      <label class="param"><span>位置 X</span>
+      <label class="param"><span>${t("bfPosX")}</span>
         <input type="range" data-p="x" min="-0.2" max="1.2" step="0.005" value="${layer.x}">
         <span class="range-val">${layer.x.toFixed(2)}</span></label>
-      <label class="param"><span>位置 Y</span>
+      <label class="param"><span>${t("bfPosY")}</span>
         <input type="range" data-p="y" min="-0.2" max="1.2" step="0.005" value="${layer.y}">
         <span class="range-val">${layer.y.toFixed(2)}</span></label>
-      <label class="param"><span>缩放</span>
+      <label class="param"><span>${t("bfScale")}</span>
         <input type="range" data-p="scale" min="0.02" max="6" step="0.01" value="${layer.scale}">
         <span class="range-val">${layer.scale.toFixed(2)}</span></label>
-      <label class="param"><span>旋转</span>
+      <label class="param"><span>${t("bfRotation")}</span>
         <input type="range" data-p="rotation" min="-180" max="180" step="1" value="${layer.rotation}">
         <span class="range-val">${Math.round(layer.rotation)}°</span></label>
-      <label class="param"><span>透明度</span>
+      <label class="param"><span>${t("bfOpacity")}</span>
         <input type="range" data-p="opacity" min="0" max="1" step="0.01" value="${layer.opacity}">
         <span class="range-val">${layer.opacity.toFixed(2)}</span></label>
     </div>
     <div class="props-btn-row">
-      <button class="btn-ghost btn-tiny" data-act="center">居中</button>
-      <button class="btn-ghost btn-tiny" data-act="fit">适配</button>
-      <button class="btn-ghost btn-tiny" data-act="cover">铺满</button>
+      <button class="btn-ghost btn-tiny" data-act="center">${t("bfCenter")}</button>
+      <button class="btn-ghost btn-tiny" data-act="fit">${t("bfFit")}</button>
+      <button class="btn-ghost btn-tiny" data-act="cover">${t("bfCover")}</button>
     </div>
-    <div class="props-section">混合模式</div>
+    <div class="props-section">${t("bfSecBlend")}</div>
     <div class="chip-row">
       ${BLEND_OPTS.map(([v, l]) =>
-        `<button class="chip ${layer.blend === v ? "on" : ""}" data-blend-chip="${v}">${l}</button>`).join("")}
+        `<button class="chip ${layer.blend === v ? "on" : ""}" data-blend-chip="${v}">${ta(l)}</button>`).join("")}
     </div>
-    <div class="props-row-hint">滤色 / 相加发光 / 正片叠底 是把本图层与<b>下方像素</b>混合 —
-      在透明画布上单图层不会有视觉差异。需要看效果就在合成台下方切换<b>「预览底色」</b>
-      或叠多个图层。导出的 WebM 始终是透明背景。</div>
-    <div class="props-section">动画（循环无缝 · 50 种）</div>
+    <div class="props-row-hint">${t("bfBlendHint")}</div>
+    <div class="props-section">${t("bfSecAnim")}</div>
     <div class="chip-grid">
       ${ANIM_ORDER.map((k) =>
-        `<button class="chip ${layer.anim === k ? "on" : ""}" data-anim-chip="${k}">${ANIMS[k].label}</button>`).join("")}
+        `<button class="chip ${layer.anim === k ? "on" : ""}" data-anim-chip="${k}">${ta(ANIMS[k].label)}</button>`).join("")}
     </div>
     ${hasParamList ? `<div class="param-list">${paramRows}${animSpeedRow}</div>` : ""}
     <div class="props-row-hint">${layer.kind === "anim"
-      ? `动图源：${layer.frames.length} 帧 · ${layer.totalDur.toFixed(2)}s · ${layer.srcW}×${layer.srcH}`
-      : `静态图源：${layer.srcW}×${layer.srcH}`}</div>
+      ? t("bfAnimSrc", { n: layer.frames.length, dur: layer.totalDur.toFixed(2), w: layer.srcW, h: layer.srcH })
+      : t("bfStaticSrc", { w: layer.srcW, h: layer.srcH })}</div>
   `;
 }
 function syncPropsTransform() {
@@ -635,9 +637,9 @@ emojiGrid.addEventListener("click", async (e) => {
     const img = await loadEmoji(key);
     const label = (EMOJI_CATALOG[key]?.label || key).split(" ")[0];
     addImageLayer(img, label);
-    toast(`已添加图层「${label}」`, "ok");
+    toast(t("bfAddedLayer", { name: label }), "ok");
   } catch (err) {
-    toast("emoji 加载失败：" + err.message, "err");
+    toast(t("bfEmojiLoadFail", { err: err.message }), "err");
   }
 });
 sourceModeSeg.addEventListener("click", (e) => {
@@ -664,9 +666,9 @@ async function handleImageFiles(fileList) {
     try {
       const img = await fileToImage(file);
       addImageLayer(img, file.name.replace(/\.[^.]+$/, ""));
-      toast(`已添加图层「${file.name}」`, "ok");
+      toast(t("bfAddedLayer", { name: file.name }), "ok");
     } catch {
-      toast(`图片「${file.name}」加载失败`, "err");
+      toast(t("bfImgLoadFail", { name: file.name }), "err");
     }
   }
   imageFile.value = "";
@@ -676,7 +678,7 @@ imageFile.addEventListener("change", () => handleImageFiles(imageFile.files));
 async function handleAnimFiles(fileList, { fitCanvas = false } = {}) {
   const files = [...fileList];
   for (const file of files) {
-    toast(`正在解码「${file.name}」…`);
+    toast(t("bfDecoding", { name: file.name }));
     try {
       const decoded = await decodeSource(file);
       const layer = addAnimLayer(decoded, file.name.replace(/\.[^.]+$/, ""));
@@ -686,9 +688,9 @@ async function handleAnimFiles(fileList, { fitCanvas = false } = {}) {
         layer.x = 0.5; layer.y = 0.5;
         renderLayerProps();
       }
-      toast(`「${file.name}」已加入 · ${decoded.frames.length} 帧`, "ok");
+      toast(t("bfDecoded", { name: file.name, n: decoded.frames.length }), "ok");
     } catch (err) {
-      toast(`「${file.name}」解码失败：${err.message}`, "err");
+      toast(t("bfDecodeFail", { name: file.name, err: err.message }), "err");
     }
   }
   animFile.value = "";
@@ -737,23 +739,23 @@ function saveDrawings(arr) {
     localStorage.setItem(LS_DRAWINGS, JSON.stringify(arr));
     return true;
   } catch {
-    toast("保存失败：浏览器本地存储已满", "err");
+    toast(t("bfSaveFull"), "err");
     return false;
   }
 }
 function renderGallery() {
   const arr = loadDrawings();
   if (!arr.length) {
-    savedGallery.innerHTML = `<div class="gallery-empty">还没有保存的画作。<br>用画板画一个并「保存到素材」。</div>`;
+    savedGallery.innerHTML = `<div class="gallery-empty">${t("bfGalleryEmpty")}</div>`;
     return;
   }
   savedGallery.innerHTML = arr.map((d) => `
     <div class="gallery-item" data-id="${esc(d.id)}" title="${esc(d.name)}">
       <img src="${d.url}" alt="${esc(d.name)}">
       <div class="gallery-item-btns">
-        <button class="gi-btn" data-act="add" title="作为图层添加">＋</button>
-        <button class="gi-btn" data-act="edit" title="载入画板编辑">✎</button>
-        <button class="gi-btn del" data-act="del" title="删除">✕</button>
+        <button class="gi-btn" data-act="add" title="${esc(t("bfAsLayer"))}">＋</button>
+        <button class="gi-btn" data-act="edit" title="${esc(t("bfEditInPaint"))}">✎</button>
+        <button class="gi-btn del" data-act="del" title="${esc(t("bfDelete"))}">✕</button>
       </div>
     </div>`).join("");
 }
@@ -770,14 +772,14 @@ savedGallery.addEventListener("click", async (e) => {
     renderGallery();
   } else if (act === "edit") {
     paintBoard.loadDataUrl(d.url);
-    toast(`「${d.name}」已载入画板`, "ok");
+    toast(t("bfLoadedToPaint", { name: d.name }), "ok");
   } else {
     try {
       const img = await loadImage(d.url);
       addImageLayer(img, d.name);
-      toast(`已添加图层「${d.name}」`, "ok");
+      toast(t("bfAddedLayer", { name: d.name }), "ok");
     } catch {
-      toast("添加失败", "err");
+      toast(t("bfAddFail"), "err");
     }
   }
 });
@@ -785,7 +787,7 @@ savedGallery.addEventListener("click", async (e) => {
 // ============ Canvas settings ============
 function syncStageMeta() {
   const frames = Math.round(state.fps * state.duration);
-  stageMeta.textContent = `${state.width} × ${state.height} · ${state.fps}fps · ${state.duration}s · ${frames}帧`;
+  stageMeta.textContent = `${state.width} × ${state.height} · ${state.fps}fps · ${state.duration}s · ${frames}${t("bfFramesSuffix")}`;
 }
 function applyCanvasSize() {
   if (stageCanvas.width !== state.width) stageCanvas.width = state.width;
@@ -845,7 +847,7 @@ function pngDataUrlToBytes(dataUrl) {
   return bytes;
 }
 generateBtn.addEventListener("click", async () => {
-  if (!state.layers.length) { toast("先添加至少一个图层", "err"); return; }
+  if (!state.layers.length) { toast(t("bfNeedLayer"), "err"); return; }
   generateBtn.disabled = true;
   generateStatus.classList.remove("hidden");
   resultBox.classList.add("hidden");
@@ -875,13 +877,13 @@ generateBtn.addEventListener("click", async () => {
       const r = (f / totalFrames) * 0.25;
       if (f % 3 === 0) {
         progressFill.style.width = (r * 100).toFixed(1) + "%";
-        progressText.textContent = `烘焙帧 ${f + 1}/${totalFrames}`;
+        progressText.textContent = t("bfBaking", { f: f + 1, total: totalFrames });
       }
       // Yield every frame so the progress text update lands and the
       // UI doesn't lock up on long bakes.
       await new Promise((res) => setTimeout(res, 0));
     }
-    progressText.textContent = "加载 ffmpeg.wasm…";
+    progressText.textContent = t("bfLoadFfmpeg");
     const blob = await encodeWebm(frames, fps, (ratio, msg) => {
       progressFill.style.width = (ratio * 100).toFixed(1) + "%";
       progressText.textContent = msg;
@@ -890,14 +892,14 @@ generateBtn.addEventListener("click", async () => {
     resultVideo.src = url;
     resultDownload.href = url;
     resultDownload.download = `buff-${Date.now().toString(36)}.webm`;
-    resultInfo.textContent = `${(blob.size / 1024).toFixed(1)} KB · ${W}×${H} · ${totalFrames}帧`;
+    resultInfo.textContent = `${(blob.size / 1024).toFixed(1)} KB · ${W}×${H} · ${totalFrames}${t("bfFramesSuffix")}`;
     resultBox.classList.remove("hidden");
-    progressText.textContent = "完成 ✓";
+    progressText.textContent = t("bfDone");
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    progressText.textContent = "失败：" + msg;
+    progressText.textContent = t("bfGenFailStatus", { msg });
     console.error(err);
-    toast("生成失败：" + msg, "err");
+    toast(t("bfGenFailToast", { msg }), "err");
   } finally {
     generateBtn.disabled = false;
     startLoop();
@@ -917,14 +919,14 @@ generateBtn.addEventListener("click", async () => {
     mount: document.getElementById("paintMount"),
     width: 500,
     height: 500,
-    saveLabel: "💾 保存到素材",
+    saveLabel: t("bfSaveToSrc"),
     onSave: (url) => {
       const arr = loadDrawings();
-      const name = `画作 ${arr.length + 1}`;
+      const name = t("bfArtName", { n: arr.length + 1 });
       arr.push({ id: "d" + Date.now().toString(36), name, url });
       if (saveDrawings(arr)) {
         renderGallery();
-        toast(`已保存「${name}」到素材`, "ok");
+        toast(t("bfSavedToSrc", { name }), "ok");
       }
     },
   });

@@ -10,6 +10,8 @@
  * WebM-with-alpha encoding and every browser decodes it fine.
  */
 
+import { t } from "./i18n.js";
+
 // Loaded lazily on first encode.
 let _ffmpegPromise = null;
 
@@ -90,7 +92,7 @@ export async function encodeWebm(pngFrames, fps, onProgress) {
   // ones, so writeFile per call takes 10× longer and the old
   // every-12-frames progress made the next 12 writes look like
   // "no progress at all".
-  if (onProgress) onProgress(0.04, "ffmpeg 就绪，开始写入帧");
+  if (onProgress) onProgress(0.04, t("bfEncReady"));
   const written = [];
 
   try {
@@ -107,7 +109,7 @@ export async function encodeWebm(pngFrames, fps, onProgress) {
       await ffmpeg.writeFile(name, pngFrames[i]);
       written.push(name);
       if (onProgress) {
-        onProgress(0.05 + (i / pngFrames.length) * 0.12, `写入帧 ${i + 1}/${pngFrames.length}`);
+        onProgress(0.05 + (i / pngFrames.length) * 0.12, t("bfEncWriteFrame", { i: i + 1, n: pngFrames.length }));
       }
     }
 
@@ -115,12 +117,12 @@ export async function encodeWebm(pngFrames, fps, onProgress) {
     const onFfProgress = ({ progress }) => {
       if (onProgress) {
         const r = 0.18 + Math.min(0.80, progress) * 0.80;
-        onProgress(r, `编码 · ${Math.round(progress * 100)}%`);
+        onProgress(r, t("bfEncEncoding", { pct: Math.round(progress * 100) }));
       }
     };
     ffmpeg.on("progress", onFfProgress);
     try {
-      if (onProgress) onProgress(0.18, "编码 VP8 + alpha");
+      if (onProgress) onProgress(0.18, t("bfEncVp8"));
       await ffmpeg.exec([
         "-framerate", String(fps),
         "-start_number", "1",
@@ -144,7 +146,7 @@ export async function encodeWebm(pngFrames, fps, onProgress) {
       ffmpeg.off("progress", onFfProgress);
     }
 
-    if (onProgress) onProgress(0.99, "读取输出");
+    if (onProgress) onProgress(0.99, t("bfEncReadOut"));
     const data = await ffmpeg.readFile("output.webm");
 
     // Clean the wasm FS so frames don't pile up across repeated encodes
@@ -152,7 +154,7 @@ export async function encodeWebm(pngFrames, fps, onProgress) {
     for (const n of written) { try { await ffmpeg.deleteFile(n); } catch {} }
     try { await ffmpeg.deleteFile("output.webm"); } catch {}
 
-    if (onProgress) onProgress(1.00, "完成");
+    if (onProgress) onProgress(1.00, t("bfEncDone"));
     return new Blob([data.buffer], { type: "video/webm" });
   } catch (e) {
     // A wasm abort / "memory access out of bounds" leaves the core

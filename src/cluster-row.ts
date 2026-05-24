@@ -420,6 +420,25 @@ OBR.onReady(async () => {
     timeStopActive = !!(event.data as any)?.active;
     renderRow();
   });
+  // Drive the 时停 button's gold state from scene metadata (the source
+  // of truth), not just the BC_STATE broadcast. The broadcast can fire
+  // BEFORE this row iframe mounts — e.g. "显示为 CG" turns time-stop on
+  // and THEN auto-opens this row, so the row would otherwise miss the
+  // active state and the button wouldn't go gold. Reading metadata on
+  // mount + on change closes that gap. NOTE: "com.time-stop/" is NOT
+  // rewritten by the dev-namespace plugin (only "com.obr-suite/"), so
+  // this key matches the time-stop module on both channels.
+  const TIMESTOP_META_KEY = "com.time-stop/state";
+  const syncTimeStopFromMeta = (meta: any) => {
+    const ts = meta?.[TIMESTOP_META_KEY];
+    const active = !!(ts && ts.active);
+    if (active !== timeStopActive) { timeStopActive = active; renderRow(); }
+  };
+  try {
+    await OBR.scene.isReady();
+    syncTimeStopFromMeta(await OBR.scene.getMetadata());
+  } catch {}
+  try { OBR.scene.onMetadataChange(syncTimeStopFromMeta); } catch {}
   OBR.broadcast.onMessage("com.obr-suite/music-board:state-active", (event) => {
     musicBoardOpen = !!(event.data as any)?.open;
     renderRow();

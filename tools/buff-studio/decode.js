@@ -10,6 +10,8 @@
 // MP4 / WebM / MOV   → a hidden <video> element, seeked frame-by-frame.
 // Anything else      → decoded as a single still frame.
 
+import { t } from "./i18n.js";
+
 const IMAGE_DECODER_TYPES = ["image/gif", "image/webp", "image/apng", "image/png"];
 
 function guessType(name) {
@@ -56,7 +58,7 @@ async function decodeImageFrames(file, type) {
     image.close();
   }
   dec.close();
-  if (!frames.length) throw new Error("没有解出任何帧");
+  if (!frames.length) throw new Error(t("bfDecNoFrames"));
   return { frames, durations, width: frames[0].width, height: frames[0].height };
 }
 
@@ -73,7 +75,7 @@ async function decodeVideo(file, type) {
   try {
     await new Promise((res, rej) => {
       v.onloadeddata = () => res();
-      v.onerror = () => rej(new Error("浏览器无法解码该视频"));
+      v.onerror = () => rej(new Error(t("bfDecNoVideo")));
     });
     const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 1;
     const SAMPLE_FPS = 20;
@@ -95,7 +97,7 @@ async function decodeVideo(file, type) {
 function seekTo(video, t) {
   return new Promise((resolve, reject) => {
     const onSeeked = () => { cleanup(); resolve(); };
-    const onErr = () => { cleanup(); reject(new Error("视频跳帧失败")); };
+    const onErr = () => { cleanup(); reject(new Error(t("bfDecSeekFail"))); };
     const cleanup = () => {
       video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("error", onErr);

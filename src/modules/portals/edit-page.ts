@@ -11,6 +11,8 @@ import {
 } from "./types";
 import { applyI18nDom, t } from "../../i18n";
 import { getLocalLang, onLangChange } from "../../state";
+import { bindPanelDrag } from "../../utils/panelDrag";
+import { PANEL_IDS } from "../../utils/panelLayout";
 
 let lang = getLocalLang();
 const tt = (k: Parameters<typeof t>[1]) => t(lang, k);
@@ -434,3 +436,15 @@ OBR.onReady(async () => {
 // was removed per user request — players delete the portal token via
 // OBR's normal delete-token UX.)
 void BROADCAST_EDIT_DELETE;
+
+// 2026-05-21 (audit) — wire the header grip into the panel-layout drag
+// system. The portal-edit popover was already registered (PANEL_IDS.
+// portalEdit + registerPanelBbox + getPanelOffset on open) but had no
+// drag handle, so it was the one fully-registered panel that couldn't
+// be moved. Now it can.
+const portalDragHandle = document.getElementById("drag-handle");
+if (portalDragHandle) {
+  try { bindPanelDrag(portalDragHandle, PANEL_IDS.portalEdit); } catch (e) {
+    console.warn("[portals/edit] bindPanelDrag failed", e);
+  }
+}

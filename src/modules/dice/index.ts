@@ -1,4 +1,5 @@
 import OBR, { isImage } from "@owlbear-rodeo/sdk";
+import { getLocalLang } from "../../state";
 import { DiceType, DIE_SIDES, DieResult, rollDie, sidesOf } from "./types";
 import { readSkinsForPlayer } from "./dice-skins";
 import { assetUrl } from "../../asset-base";
@@ -578,6 +579,7 @@ export async function setupDice(): Promise<void> {
   // would make every dice roll fire showDiceEffect twice on this
   // client (the symptom users reported as "DM 端有概率多次播放").
   if (setupDiceRegistered) return;
+  const en = getLocalLang() === "en";
   setupDiceRegistered = true;
 
   // Clear any stale `LS_AUTO_DICE_HISTORY="0"` from the era when the
@@ -597,7 +599,7 @@ export async function setupDice(): Promise<void> {
       id: SKIN_CTX_ID,
       icons: [{
         icon: SKIN_CTX_ICON,
-        label: "设为我的骰子皮肤",
+        label: en ? "Set as my dice skin" : "设为我的骰子皮肤",
         filter: {
           every: [
             { key: "type", value: "IMAGE" },

@@ -683,11 +683,23 @@ export function useInitiative() {
       (event) => {
         if (!isGMRef.current) return;
         const reqActive = (event.data as any)?.activeId as string | undefined;
-        // Sanity check: only advance if the player thought they were active.
-        // Prevents a stale request from skipping a turn after the GM already
-        // moved on via their own controls.
+        // Sanity + de-dupe. The OLD guard `if (reqActive && curActive &&
+        // reqActive !== curActive) return` was INVERTED: it only blocked
+        // when both ids were present AND differed, so a missing /
+        // momentarily-stale id (curActive === undefined during a write
+        // round-trip, or an empty reqActive) slipped THROUGH and fired a
+        // SECOND advanceTurn(1). Combined with a racing auto-activate
+        // that picked an unrelated token, that produced the "切下一位
+        // 瞬间跳到无关角色 + 两行同时滑出" double-switch (bug 2026-05-21).
+        //
+        // New rule: advance ONLY when the requester's claimed active
+        // matches the REAL current active, AND we're not already
+        // mid-advance past it (optimistic pointer moves synchronously in
+        // advanceTurn, so a duplicate request arriving before the write
+        // lands is rejected here).
         const curActive = allItemsRef.current.find((i) => i.active)?.id;
-        if (reqActive && curActive && reqActive !== curActive) return;
+        if (!reqActive || !curActive || reqActive !== curActive) return;
+        if (optimisticActiveIdRef.current && optimisticActiveIdRef.current !== curActive) return;
         advanceTurnRef.current(1);
       }
     );
@@ -1192,6 +1204,14 @@ export function useInitiative() {
 
     // Queue scene write onto chain — runs serially, never drops.
     turnWriteChainRef.current = turnWriteChainRef.current.then(async () => {
+      // Block the refreshItems auto-activate path for the duration of
+      // this deliberate write (+ a short settle window). setActiveItem-
+      // FromIds passes id-strings to updateItems, which makes the SDK do
+      // an internal getItems round-trip; an items.onChange firing in
+      // that window could otherwise see a transient "nobody active"
+      // state and auto-activate a DIFFERENT token at the prev index —
+      // the "瞬间跳到无关角色" half of the double-switch bug.
+      autoActivateLocked.current = true;
       try {
         const prev =
           lastWrittenActiveIdRef.current
@@ -1204,6 +1224,11 @@ export function useInitiative() {
         lastWrittenActiveIdRef.current = nextId;
         broadcastFocus(nextId).catch(() => {});
       } catch {}
+      finally {
+        // Release after the post-write onChange has settled, so a
+        // genuine "active token removed" can still auto-activate later.
+        setTimeout(() => { autoActivateLocked.current = false; }, 350);
+      }
     });
     return turnWriteChainRef.current;
   }, [broadcastFocus, setActiveItemFromIds, writeCombatState]);

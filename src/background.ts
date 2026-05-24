@@ -23,6 +23,7 @@ import { setupHpBar, teardownHpBar } from "./modules/hpBar";
 import { setupMetadataInspector, teardownMetadataInspector } from "./modules/metadata-inspector";
 import { setupFullFog, teardownFullFog } from "./modules/fullFog";
 import { setupMusicBoard, teardownMusicBoard } from "./modules/musicBoard";
+import { setupTransform, teardownTransform } from "./modules/transform";
 import { setupCrossSceneCards } from "./modules/cross-scene-cards";
 import { setupPerfWindow } from "./modules/perfWindow";
 import { assetUrl } from "./asset-base";
@@ -91,6 +92,9 @@ const CLUSTER_URL = assetUrl("cluster.html");
 const CLUSTER_ROW_URL = assetUrl("cluster-row.html");
 const BC_CLUSTER_ROW_TOGGLE = "com.obr-suite/cluster-row-toggle";
 const BC_CLUSTER_ROW_STATE = "com.obr-suite/cluster-row-state";
+// Idempotent "ensure row open" — time-stop broadcasts this so the DM
+// keeps the off-switch visible behind the cinematic / CG overlay.
+const BC_CLUSTER_ROW_OPEN = "com.obr-suite/cluster-row-open";
 
 // DM-only announcement modal. Opened from the megaphone button inside
 // the cluster row (left of the gear); auto-popup-on-scene-ready was
@@ -397,6 +401,17 @@ OBR.onReady(() => {
     else await openClusterRow();
   });
 
+  // Programmatic "ensure the row is OPEN" — used by time-stop so the
+  // DM always has the off-switch (时停 button) visible while the
+  // cinematic / CG overlay covers the screen (esp. CG, triggered from
+  // a right-click menu while the row is closed). Goes through the SAME
+  // openClusterRow() the trigger uses, so clusterRowIsOpen + the
+  // trigger glow stay in sync — the next trigger click correctly
+  // toggles it CLOSED. Idempotent: no-op when already open.
+  OBR.broadcast.onMessage(BC_CLUSTER_ROW_OPEN, async () => {
+    if (!clusterRowIsOpen) await openClusterRow();
+  });
+
   // Cluster-row iframe broadcasts its measured natural width on every
   // render (renderRow → requestAnimationFrame → broadcast). We resize
   // the popover so its physical click-blocking area matches the
@@ -432,6 +447,8 @@ OBR.onReady(() => {
     PANEL_IDS.ccInfo,
     PANEL_IDS.portalEdit,
     PANEL_IDS.statusPalette,
+    PANEL_IDS.hpBar,
+    PANEL_IDS.musicBoard,
   ];
   async function collectLayoutEditorBboxes(): Promise<Record<string, { left: number; top: number; width: number; height: number }>> {
     const bboxMap: Record<string, { left: number; top: number; width: number; height: number }> = {};
@@ -595,13 +612,12 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
   // Trickster + circle-image promoted from dev to stable on 2026-05-08.
   trickster: { setup: setupTrickster, teardown: teardownTrickster },
   circleImage: { setup: setupCircleImage, teardown: teardownCircleImage },
-  // Music board promoted to stable 2026-05-19 — studio web tool +
-  // default catalog + persistent background engine + settings panel
-  // entry are all in place. Anyone on either channel can use it.
-  musicBoard: {
-    setup: async () => { await setupMusicBoard(); },
-    teardown: async () => { teardownMusicBoard(); },
-  },
+  // Music board — RETIRED 2026-05-23 with project closure. The in-
+  // plugin module is no longer registered here, so even if a room
+  // still has musicBoard:true in stored state, setupMusicBoard never
+  // runs and no popover / audio engine / PeerJS pairing starts. The
+  // web tool at obr.dnd.center/studio/music-studio/ still works
+  // standalone; the settings page links there.
   // fullFog stays dev-only — door / window cutting still in design.
   ...(STABLE_HIDES
     ? {}
@@ -611,6 +627,14 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
           teardown: async () => { await teardownFullFog(); },
         },
         // 2026-05-14 — `follow` removed here per user request.
+        // Transform (变身) — dev-only scaffold (2026-05-20). Right-click
+        // context menu + snapshot/revert + ad-hoc image swap working;
+        // preset forms + two-stage effects + bestiary + camera focus
+        // still to come. Promote out of this gate once it's complete.
+        transform: {
+          setup: async () => { await setupTransform(); },
+          teardown: async () => { teardownTransform(); },
+        },
       }),
 };
 
