@@ -38,6 +38,11 @@ const META_KEY_OPEN  = "com.obr-suite/music-board:open";
 const META_KEY_STATE = "com.obr-suite/music-board:state";
 const BC_TOGGLE      = "com.obr-suite/music-board:toggle";
 const BC_ACTIVE      = "com.obr-suite/music-board:state-active";
+// Popover → background: minimize/expand. Background close+reopens the
+// popover at the new dims (the only way to actually change the iframe's
+// click hit-test region; setWidth/setHeight only resize the visual box
+// and leave the old region blocking the canvas).
+const BC_RESIZE      = "com.obr-suite/music-board:resize";
 
 // Dimensions differ by role: the player popover has no pair-section
 // (CSS hides it) so it can be much shorter. The width stays the same
@@ -45,14 +50,68 @@ const BC_ACTIVE      = "com.obr-suite/music-board:state-active";
 const POPOVER_W      = 380;
 const POPOVER_H_GM   = 540;
 const POPOVER_H_PLYR = 300;
+// Mini-mode dims: just big enough for the round vinyl button (36×36)
+// + its turntable case (border + tonearm decoration). Anything bigger
+// uselessly blocks canvas clicks; anything smaller crops the case.
+const POPOVER_W_MINI = 92;
+const POPOVER_H_MINI = 80;
 // Clear OBR's right-side panels (people / scene settings) — 120 px
 // gap leaves the popover well off the toolbar.
 const RIGHT_INSET    = 120;
 const TOP_INSET      = 56;
 
+// Persistence keys for per-client mini state + auto-reconnect hint.
+// Lives in the popover iframe's localStorage, but background also
+// reads/writes them when re-opening the popover so the new iframe
+// boots into the correct mode.
+const LS_MINI = "obr-music-board:minimized";
+const LS_PAIR = "obr-music-board:last-pair-code";
+
 let popoverOpen = false;
 let myRole: "GM" | "PLAYER" = "PLAYER";
 const unsubs: Array<() => void> = [];
+
+// Helper: detect mini state for a new popover open. Priority:
+//   1. Explicit `opts.mini` from the resize broadcast
+//   2. Saved localStorage value from a previous session
+//   3. Role default — PLAYER boots minimized so it doesn't blanket
+//      the canvas; GM boots full because they need the pair UI.
+function resolveMiniMode(explicit?: boolean): boolean {
+  if (typeof explicit === "boolean") return explicit;
+  try {
+    const v = localStorage.getItem(LS_MINI);
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch {}
+  return myRole === "PLAYER";
+}
+
+// Compute the popover's anchor (= its RIGHT edge, since transformOrigin
+// is RIGHT) and TOP, applying the user's drag offset BUT clamping so
+// the whole popover stays on-screen. Without the clamp, dragging the
+// mini popover toward the right edge could push it (and its only drag
+// handle) entirely off-screen — then there's nothing left to grab to
+// pull it back, the "贴边拖不出来" bug. We keep an 8px margin on every
+// side so the handle is always reachable. The clamp is applied at
+// OPEN time (and in the bbox provider), so even a stale oversized
+// stored offset self-heals on the next open.
+const EDGE_MARGIN = 8;
+function clampedAnchor(
+  vw: number, vh: number, w: number, h: number, off: PanelOffset,
+): { left: number; top: number } {
+  // anchorRight = popover's right edge in viewport coords.
+  let anchorRight = vw - RIGHT_INSET + off.dx;
+  // Right edge ≤ vw-margin (stays on-screen) AND left edge
+  // (= anchorRight - w) ≥ margin → anchorRight ≥ w + margin.
+  anchorRight = Math.min(anchorRight, vw - EDGE_MARGIN);
+  anchorRight = Math.max(anchorRight, w + EDGE_MARGIN);
+  let top = TOP_INSET + off.dy;
+  const maxTop = Math.max(EDGE_MARGIN, vh - h - EDGE_MARGIN);
+  top = Math.min(Math.max(top, EDGE_MARGIN), maxTop);
+  return { left: anchorRight, top };
+}
+
+interface PanelOffset { dx: number; dy: number; }
 
 // Panel bbox provider — used by the layout-editor + drag-preview modal
 // to render this panel's proxy at the right place. Returns the
@@ -60,16 +119,28 @@ const unsubs: Array<() => void> = [];
 // popover isn't open.
 registerPanelBbox(PANEL_IDS.musicBoard, async () => {
   try {
-    let vw = 0;
+    let vw = 0, vh = 0;
     try { vw = await OBR.viewport.getWidth(); } catch {}
+    try { vh = await OBR.viewport.getHeight(); } catch {}
     vw = Math.max(vw || 0, window.innerWidth || 0, 1024);
+    vh = Math.max(vh || 0, window.innerHeight || 0, 720);
     const isPlayer = myRole === "PLAYER";
-    const w = POPOVER_W;
-    const h = isPlayer ? POPOVER_H_PLYR : POPOVER_H_GM;
+    // bbox uses the dims the popover would currently open at — so the
+    // layout-editor proxy + drag-preview overlay match what the user
+    // visually sees. mini popovers get the mini box; full popovers get
+    // the role-appropriate full box.
+    const mini = resolveMiniMode();
+    const w = mini ? POPOVER_W_MINI : POPOVER_W;
+    const h = mini
+      ? POPOVER_H_MINI
+      : (isPlayer ? POPOVER_H_PLYR : POPOVER_H_GM);
     const userOff = getPanelOffset(PANEL_IDS.musicBoard);
+    // Same clamp as openPopover so the ghost the user grabs lines up
+    // with where the popover actually is (and never off-screen).
+    const a = clampedAnchor(vw, vh, w, h, userOff);
     return {
-      left: vw - w - RIGHT_INSET + userOff.dx,
-      top:  TOP_INSET + userOff.dy,
+      left: a.left - w, // anchor is the RIGHT edge → top-left = right - w
+      top:  a.top,
       width: w,
       height: h,
     };
@@ -108,15 +179,20 @@ export async function setupMusicBoard(): Promise<void> {
     console.warn("[music-board] subscribe scene metadata failed", e);
   }
 
-  // Drag-end → re-open at the new offset. The drag-preview modal
-  // saved the new dx/dy in localStorage; openPopover re-reads it.
+  // Drag-end → re-open at the new offset. The drag-preview modal saved
+  // the new dx/dy in localStorage; openPopover re-reads it. OBR has no
+  // setPosition for popovers, so a move requires a fresh open. We read
+  // the saved mini state so a drag preserves the user's size, pass
+  // autoReconnect so the freshly-opened iframe re-pairs, and fromResize
+  // so the GM reads the live scene state on boot.
   try {
     const u = OBR.broadcast.onMessage(BC_PANEL_DRAG_END, async (event) => {
       const data = event.data as DragEndPayload | undefined;
       if (data?.panelId !== PANEL_IDS.musicBoard) return;
       if (popoverOpen) {
+        const hadPair = await peekHadPair();
         await closePopover();
-        await openPopover();
+        await openPopover({ mini: resolveMiniMode(), autoReconnect: hadPair, fromResize: true });
       }
     });
     if (typeof u === "function") unsubs.push(u);
@@ -124,14 +200,56 @@ export async function setupMusicBoard(): Promise<void> {
   try {
     const u = OBR.broadcast.onMessage(BC_PANEL_RESET, async () => {
       if (popoverOpen) {
+        const hadPair = await peekHadPair();
         await closePopover();
-        await openPopover();
+        await openPopover({ mini: resolveMiniMode(), autoReconnect: hadPair, fromResize: true });
       }
     });
     if (typeof u === "function") unsubs.push(u);
   } catch {}
 
+  // Minimize / expand → the popover asks us to close+reopen at the new
+  // size. setWidth/setHeight can't do this — OBR only re-computes the
+  // iframe's click hit-test region on a real open, so a visual-only
+  // shrink keeps blocking the canvas. We persist the new mini state +
+  // pair code (so the reopened iframe boots correctly and re-pairs),
+  // then close+reopen. LOCAL only — each client owns its own mini view.
+  try {
+    const u = OBR.broadcast.onMessage(BC_RESIZE, async (event) => {
+      const data = event.data as { mini?: boolean; pairCode?: string } | undefined;
+      if (!data || typeof data.mini !== "boolean") return;
+      try { localStorage.setItem(LS_MINI, data.mini ? "1" : "0"); } catch {}
+      if (data.pairCode && typeof data.pairCode === "string") {
+        try { localStorage.setItem(LS_PAIR, data.pairCode); } catch {}
+      }
+      if (popoverOpen) {
+        await closePopover();
+        await openPopover({
+          mini: data.mini,
+          autoReconnect: !!data.pairCode,
+          fromResize: true,
+        });
+      }
+    });
+    if (typeof u === "function") unsubs.push(u);
+  } catch (e) {
+    console.warn("[music-board] subscribe resize failed", e);
+  }
+
   console.info("[music-board] module setup complete; role =", myRole);
+}
+
+// True iff there's a saved pair code AND the user role pairs at all
+// (GM only — players never pair, they just receive scene metadata).
+// Used to gate the autoReconnect URL param on reopen.
+async function peekHadPair(): Promise<boolean> {
+  if (myRole !== "GM") return false;
+  try {
+    const v = localStorage.getItem(LS_PAIR);
+    return !!(v && v.trim());
+  } catch {
+    return false;
+  }
 }
 
 async function toggleRoomOpen(): Promise<void> {
@@ -166,38 +284,67 @@ async function reactToOpenFlag(shouldBeOpen: boolean): Promise<void> {
       { destination: "LOCAL" });
   } catch {}
   if (shouldBeOpen && !popoverOpen) {
-    await openPopover();
+    // Initial open — let resolveMiniMode pick the default (PLAYER
+    // boots mini, GM boots full, but localStorage overrides both).
+    // autoReconnect on initial open only if we have a saved pair code
+    // from a prior session AND we're GM.
+    await openPopover({ autoReconnect: await peekHadPair() });
   } else if (!shouldBeOpen && popoverOpen) {
     await closePopover();
   }
 }
 
-async function openPopover(): Promise<void> {
+interface OpenPopoverOpts {
+  mini?: boolean;          // explicit mini state override
+  autoReconnect?: boolean; // pass ?auto=1 so the new iframe auto-pairs
+  fromResize?: boolean;    // pass ?resize=1 so the GM iframe reads
+                           // scene metadata on boot (continuing an
+                           // existing session, not a fresh open)
+}
+
+async function openPopover(opts: OpenPopoverOpts = {}): Promise<void> {
   if (popoverOpen) return;
+  const mini = resolveMiniMode(opts.mini);
+
   let vw = 0, vh = 0;
   try { vw = await OBR.viewport.getWidth(); } catch {}
   try { vh = await OBR.viewport.getHeight(); } catch {}
   vw = Math.max(vw || 0, window.innerWidth || 0, 1024);
   vh = Math.max(vh || 0, window.innerHeight || 0, 720);
   const isPlayer = myRole === "PLAYER";
-  const targetH  = isPlayer ? POPOVER_H_PLYR : POPOVER_H_GM;
+
+  const w = mini ? POPOVER_W_MINI : POPOVER_W;
+  const targetH = mini
+    ? POPOVER_H_MINI
+    : (isPlayer ? POPOVER_H_PLYR : POPOVER_H_GM);
+
   const userOff  = getPanelOffset(PANEL_IDS.musicBoard);
-  // Players boot minimized so the music board doesn't slam over their UI.
-  const url = `${PAGE_URL}?role=${myRole}${isPlayer ? "&mini=1" : ""}`;
+  const clampH   = Math.min(targetH, vh - 80);
+  // Clamp the anchor so the popover (esp. the mini box + its drag
+  // handle) never lands off-screen — fixes the "贴边拖不出来" bug. We
+  // clamp with the ACTUAL open height (clampH) so the bottom-edge guard
+  // matches what's rendered.
+  const anchor = clampedAnchor(vw, vh, w, clampH, userOff);
+  // ?mini=1 tells the popover to boot in minimized CSS layout; ?auto=1
+  // tells it to programmatically re-pair after the DOM settles (GM
+  // only — players don't pair).
+  const qs = new URLSearchParams();
+  qs.set("role", myRole);
+  if (mini) qs.set("mini", "1");
+  if (opts.autoReconnect && myRole === "GM") qs.set("auto", "1");
+  if (opts.fromResize) qs.set("resize", "1");
+  const url = `${PAGE_URL}?${qs.toString()}`;
   try {
     await OBR.popover.open({
       id: POPOVER_ID,
       url,
-      width: POPOVER_W,
-      height: Math.min(targetH, vh - 80),
+      width: w,
+      height: clampH,
       anchorReference: "POSITION",
-      // Anchor at viewport right - RIGHT_INSET, shifted by user drag.
-      // transformOrigin RIGHT keeps the popover's right edge pinned
-      // (so dragging dx>0 moves it right, dx<0 moves it left).
-      anchorPosition: {
-        left: vw - RIGHT_INSET + userOff.dx,
-        top:  TOP_INSET        + userOff.dy,
-      },
+      // anchor.left is the popover's RIGHT edge (transformOrigin RIGHT);
+      // clampedAnchor already kept it within [w+margin, vw-margin] so
+      // dragging toward the edge can't strand it off-screen.
+      anchorPosition: { left: anchor.left, top: anchor.top },
       anchorOrigin:    { horizontal: "RIGHT", vertical: "TOP" },
       transformOrigin: { horizontal: "RIGHT", vertical: "TOP" },
       hidePaper: true,

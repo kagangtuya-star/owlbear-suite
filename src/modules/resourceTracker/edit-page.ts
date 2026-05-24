@@ -31,6 +31,13 @@ import {
   PLUGIN_ID,
 } from "./types";
 import { ICON_LIBRARY, ICON_LABELS, ICON_IDS } from "./icons";
+import { applyI18nDom, t } from "../../i18n";
+import { getLocalLang, onLangChange } from "../../state";
+
+// i18n — static text via data-i18n; dynamic strings via T().
+let lang = getLocalLang();
+const T = (k: Parameters<typeof t>[1]) => t(lang, k);
+try { applyI18nDom(lang); } catch {}
 
 interface HashPayload {
   itemId: string;
@@ -108,17 +115,17 @@ function escHtml(s: string): string {
 function renderPresets(): void {
   const arr = readPresets();
   if (!arr.length) {
-    chipsPresets.innerHTML = `<span class="empty">没有预设。改完后点右上角「+ 保存当前为预设」即可加进来。</span>`;
+    chipsPresets.innerHTML = `<span class="empty">${escHtml(T("rePresetsEmpty"))}</span>`;
     return;
   }
   // Each chip carries the icon SVG + name, plus a × delete button.
   // Click chip body → load this preset into the form. Click × → drop it.
   chipsPresets.innerHTML = arr.map((p, idx) => {
     const iconSvg = ICON_LIBRARY[p.icon] ?? ICON_LIBRARY.gem;
-    return `<span class="chip" data-idx="${idx}" title="${escHtml(p.name)} · ${p.type} · 上限 ${p.max}">
+    return `<span class="chip" data-idx="${idx}" title="${escHtml(p.name)} · ${p.type} · ${escHtml(T("rePresetMax"))} ${p.max}">
       <span class="ico">${iconSvg}</span>
       <span class="lab">${escHtml(p.name)}</span>
-      <button class="del" type="button" data-del="${idx}" title="删除该预设">×</button>
+      <button class="del" type="button" data-del="${idx}" title="${escHtml(T("rePresetDel"))}">×</button>
     </span>`;
   }).join("");
 }
@@ -160,7 +167,7 @@ chipsPresets.addEventListener("click", (e) => {
 });
 
 btnAddPreset.addEventListener("click", () => {
-  const name = inpName.value.trim() || "自定义";
+  const name = inpName.value.trim() || T("reDefaultName");
   const max = Number(inpMax.value);
   if (!Number.isFinite(max)) return;
   const next: ResourcePreset = {
@@ -233,7 +240,7 @@ function updatePreview(): void {
   previewIconEl.innerHTML = ICON_LIBRARY[selectedIcon] ?? ICON_LIBRARY.gem;
   const cur = inpCurrent.value || "0";
   const max = inpMax.value || "0";
-  const name = inpName.value.trim() || "(未命名)";
+  const name = inpName.value.trim() || T("rtUnnamed");
   previewLabelEl.textContent = `${name} · ${cur} / ${max}`;
 }
 
@@ -242,7 +249,7 @@ function applyPayload(p: HashPayload): void {
   itemId = p.itemId;
   if (p.resource) {
     editingResourceId = p.resource.id;
-    titleEl.textContent = "编辑资源";
+    titleEl.textContent = T("reEditTitle");
     btnDelete.style.display = "";
     inpName.value = p.resource.name;
     selectedType = p.resource.type;
@@ -251,11 +258,11 @@ function applyPayload(p: HashPayload): void {
     selectedIcon = p.resource.icon;
   } else {
     editingResourceId = null;
-    titleEl.textContent = "新建资源";
+    titleEl.textContent = T("reNewTitle");
     btnDelete.style.display = "none";
     // Default name "自定义" + auto-select on first focus → user can
     // start typing the real name without manually clearing the field.
-    inpName.value = "自定义";
+    inpName.value = T("reDefaultName");
     selectedType = "count";
     inpCurrent.value = "2";
     inpMax.value = "2";
@@ -304,14 +311,14 @@ document.body.addEventListener("mousedown", (e) => {
 
 btnDelete.addEventListener("click", () => {
   if (!editingResourceId) return;
-  if (!confirm("删除该资源？此操作不可撤销。")) return;
+  if (!confirm(T("reConfirmDelete"))) return;
   broadcast(BC_RESOURCE_DELETE, { itemId, resourceId: editingResourceId });
 });
 
 btnSave.addEventListener("click", () => {
   const name = inpName.value.trim();
   if (!name) {
-    alert("名字不能为空");
+    alert(T("reErrNameEmpty"));
     inpName.focus();
     return;
   }
@@ -319,7 +326,7 @@ btnSave.addEventListener("click", () => {
   const current = Number(inpCurrent.value);
   const max = Number(inpMax.value);
   if (!Number.isFinite(current) || !Number.isFinite(max)) {
-    alert("当前 / 最大值需为数字");
+    alert(T("reErrNumbers"));
     return;
   }
   const resource: Resource = {

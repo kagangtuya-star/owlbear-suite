@@ -31,6 +31,7 @@ import OBR, {
   type ToolEvent,
 } from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../../asset-base";
+import { getLocalLang } from "../../../state";
 import {
   PLUGIN_ID,
   FOG_PATH_KEY,
@@ -695,6 +696,7 @@ async function dragCancel(): Promise<void> {
 
 export async function setupFullFogDoor(): Promise<void> {
   if (registered) return;
+  const en = getLocalLang() === "en";
   let role: "GM" | "PLAYER" = "PLAYER";
   try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
 
@@ -708,7 +710,7 @@ export async function setupFullFogDoor(): Promise<void> {
         icons: [
           {
             icon: DOOR_ICON_URL,
-            label: "门",
+            label: en ? "Door" : "门",
             filter: { activeTools: ["rodeo.owlbear.tool/fog"] },
           },
         ],
@@ -777,7 +779,7 @@ export async function setupFullFogDoor(): Promise<void> {
         icons: [
           {
             icon: WINDOW_ICON_URL,
-            label: "窗",
+            label: en ? "Window" : "窗",
             filter: { activeTools: ["rodeo.owlbear.tool/fog"] },
           },
         ],

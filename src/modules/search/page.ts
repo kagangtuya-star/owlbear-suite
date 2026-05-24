@@ -225,8 +225,32 @@ const CATEGORY: Record<number, CategoryInfo> = {
   56: { label: "物品集合", data: { file: "items.json", key: "itemGroup" } },
   57: { label: "物品", data: { file: "items.json", key: "item" } },
 };
+// English labels for the result-category chips (lang === "en"). Keyed by
+// the same numeric category code as CATEGORY. categoryInfo() swaps these
+// in on the EN path so every display site reading `.label` gets it for
+// free (the zh `label` above stays the source of truth for fallback).
+const CATEGORY_LABEL_EN: Record<number, string> = {
+  1: "Monster", 2: "Spell", 3: "Background", 4: "Item", 5: "Class",
+  6: "Condition", 7: "Feat", 8: "Feature", 9: "Psionic", 10: "Race",
+  11: "Reward", 12: "Variant Rule", 13: "Adventure", 14: "Deity",
+  15: "Vehicle", 16: "Trap", 17: "Hazard", 18: "Book", 19: "Cult",
+  20: "Boon", 21: "Disease", 22: "Metamagic", 23: "Maneuver", 24: "Table",
+  25: "Deck", 27: "Arcane Shot", 29: "Fighting Style", 30: "Class Feature",
+  31: "Item", 32: "Pact", 33: "Ki Feature", 34: "Infusion",
+  35: "Vehicle Upgrade", 36: "Ship Customization", 37: "Rune",
+  40: "Subclass", 41: "Subclass Feature", 42: "Action", 43: "Language",
+  44: "Book", 45: "Page", 46: "Monster Lore", 47: "Char Option",
+  48: "Recipe", 49: "Rule", 50: "Skill", 51: "Sense", 52: "Deck",
+  53: "Card", 54: "Weapon Mastery", 55: "Place", 56: "Item Group",
+  57: "Item", 58: "Weapon Property",
+};
 function categoryInfo(c: number): CategoryInfo {
-  return CATEGORY[c] ?? { label: `?${c}` };
+  const info = CATEGORY[c] ?? { label: `?${c}` };
+  if (getLocalLang() === "en") {
+    const en = CATEGORY_LABEL_EN[c];
+    if (en) return { ...info, label: en };
+  }
+  return info;
 }
 
 // --- Source code lookup ---

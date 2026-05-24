@@ -47,6 +47,13 @@ import {
 } from "./modules/statusTracker/types";
 import { bindPanelDrag } from "./utils/panelDrag";
 import { PANEL_IDS } from "./utils/panelLayout";
+import { t, applyI18nDom } from "./i18n";
+import { getLocalLang, onLangChange } from "./state";
+
+// i18n — most text here is built dynamically in JS, so read the active
+// language fresh on each render via T(). (Group/category names are
+// user/stored data and are intentionally NOT translated.)
+const T = (k: Parameters<typeof t>[1]) => t(getLocalLang(), k);
 import { assetUrl } from "./asset-base";
 
 const BC_DRAG_START = `${PLUGIN_ID}/drag-start`;
@@ -168,7 +175,7 @@ function showBuffPreview(buffId: string): void {
   }
   previewLabelEl.innerHTML =
     `<span class="bp-name">${escapeHtml(b.name)}</span>` +
-    `<span class="bp-hint">${b.group ? escapeHtml(b.group) + " · " : ""}悬停预览效果</span>`;
+    `<span class="bp-hint">${b.group ? escapeHtml(groupLabel(b.group)) + " · " : ""}${T("stHoverPreview")}</span>`;
   previewEl.classList.add("is-active");
 }
 
@@ -208,6 +215,12 @@ interface CatalogFile {
 }
 
 const UNCATEGORIZED = "未分类";
+
+// "未分类" is the STORED group sentinel — never translate the stored
+// value (saved catalogs / presets reference it literally). This helper
+// maps it to a localized DISPLAY label only; user-defined group names
+// pass through unchanged.
+const groupLabel = (g: string): string => (g === UNCATEGORIZED ? T("stCatUncategorized") : g);
 
 // Per-client persistence of the active category filter. The user's
 // reasonable expectation is that picking "Buffs" stays selected
@@ -640,18 +653,18 @@ function newPresetId(): string {
 
 function renderPresets(): void {
   if (!presetsBarEl) return;
-  let html = `<span class="presets-lbl">预设</span>`;
+  let html = `<span class="presets-lbl">${T("stPresetsLbl")}</span>`;
   if (presets.length === 0) {
-    html += `<span class="presets-empty">还没有预设。先在过滤栏选一个分组，再点右边「+ 保存当前为预设」。</span>`;
+    html += `<span class="presets-empty">${T("stPresetsEmpty")}</span>`;
   } else {
     html += presets.map((p) => {
       const count = p.buffIds.length;
       return `<button class="preset-chip" type="button" draggable="true"
                       data-preset-id="${escapeHtml(p.id)}"
-                      title="点击：应用 / 删除 · 拖拽：拖到 token 上应用">${escapeHtml(p.name)}<span class="pre-count">${count}</span></button>`;
+                      title="${escapeHtml(T("stPresetChipTitle"))}">${escapeHtml(p.name)}<span class="pre-count">${count}</span></button>`;
     }).join("");
   }
-  html += `<button class="preset-save" id="presetSave" type="button" title="把当前过滤分组的所有 buffs 保存为一个新预设">+ 保存当前为预设</button>`;
+  html += `<button class="preset-save" id="presetSave" type="button" title="${escapeHtml(T("stPresetSaveTitle"))}">${T("stPresetSave")}</button>`;
   presetsBarEl.innerHTML = html;
 }
 
@@ -664,10 +677,10 @@ function openPresetMenu(chip: HTMLElement, preset: BuffPreset): void {
   const menu = document.createElement("div");
   menu.className = "preset-menu";
   menu.innerHTML =
-    `<button data-act="overwrite">覆盖应用到所有角色卡 token</button>` +
-    `<button data-act="merge">叠加应用到所有角色卡 token</button>` +
-    `<button data-act="rename">重命名预设</button>` +
-    `<button class="danger" data-act="delete">删除预设</button>`;
+    `<button data-act="overwrite">${T("stPresetOverwrite")}</button>` +
+    `<button data-act="merge">${T("stPresetMerge")}</button>` +
+    `<button data-act="rename">${T("stPresetRename")}</button>` +
+    `<button class="danger" data-act="delete">${T("stPresetDelete")}</button>`;
   document.body.appendChild(menu);
   const r = chip.getBoundingClientRect();
   menu.style.left = `${Math.round(r.left)}px`;
@@ -683,19 +696,22 @@ function openPresetMenu(chip: HTMLElement, preset: BuffPreset): void {
       const count = await applyPresetToCharacterCardTokens(preset, mode);
       try {
         await OBR.notification.show(
-          `预设「${preset.name}」已${mode === "overwrite" ? "覆盖" : "叠加"}应用到 ${count} 个角色卡 token`,
+          T("stPresetApplied")
+            .replace("{name}", preset.name)
+            .replace("{mode}", mode === "overwrite" ? T("stModeOverwrite") : T("stModeMerge"))
+            .replace("{count}", String(count)),
           "SUCCESS",
         );
       } catch { /* notification best-effort */ }
     } else if (act === "rename") {
-      const next = window.prompt("新名字：", preset.name);
+      const next = window.prompt(T("stRenamePromptNew"), preset.name);
       if (next && next.trim()) {
         preset.name = next.trim();
         savePresets();
         renderPresets();
       }
     } else if (act === "delete") {
-      if (window.confirm(`删除预设「${preset.name}」？`)) {
+      if (window.confirm(T("stPresetDeleteConfirm").replace("{name}", preset.name))) {
         presets = presets.filter((p) => p.id !== preset.id);
         savePresets();
         renderPresets();
@@ -784,11 +800,11 @@ if (presetsBarEl) {
         : buffs.filter((b) => (b.group ?? UNCATEGORIZED) === activeFilter);
       const ids = list.filter((b) => b.name.trim() !== "").map((b) => b.id);
       if (ids.length === 0) {
-        window.alert("当前过滤分组里没有可用的 buff，无法保存为预设。");
+        window.alert(T("stPresetNoBuffs"));
         return;
       }
-      const def = activeFilter ?? "全部";
-      const name = window.prompt(`给这个预设起个名字（${ids.length} 个 buff）：`, def);
+      const def = activeFilter === null ? T("stCatAll") : groupLabel(activeFilter);
+      const name = window.prompt(T("stPresetNamePrompt").replace("{count}", String(ids.length)), def);
       if (!name || !name.trim()) return;
       presets.push({ id: newPresetId(), name: name.trim(), buffIds: ids });
       savePresets();
@@ -844,7 +860,7 @@ try {
     await applyPresetToToken(p, data.tokenId);
     try {
       await OBR.notification.show(
-        `预设「${p.name}」已应用到 token（叠加）`, "SUCCESS",
+        T("stPresetAppliedMerge").replace("{name}", p.name), "SUCCESS",
       );
     } catch {}
   });
@@ -933,7 +949,7 @@ function renderFilters(): void {
   // we drop it because edit mode shows all buffs anyway (no filter).
   let html = "";
   if (!editMode) {
-    html += `<button class="cat-btn ${activeFilter === null ? "on" : ""}" data-g="">全部</button>`;
+    html += `<button class="cat-btn ${activeFilter === null ? "on" : ""}" data-g="">${T("stCatAll")}</button>`;
   }
   for (const g of groups) {
     // Category-button drag (re-order categories) is edit-mode only,
@@ -942,13 +958,13 @@ function renderFilters(): void {
     // got reverted (see renderGrid + onBubblePointerDown comments).
     const dragAttr = editMode ? `draggable="true"` : "";
     const isOn = (!editMode && activeFilter === g) ? "on" : "";
-    html += `<button class="cat-btn ${isOn}" data-g="${escapeHtml(g)}" ${dragAttr}>${escapeHtml(g)}</button>`;
+    html += `<button class="cat-btn ${isOn}" data-g="${escapeHtml(g)}" ${dragAttr}>${escapeHtml(groupLabel(g))}</button>`;
   }
   if (editMode) {
     if (addCatPending) {
-      html += `<input class="cat-input" id="cat-add-input" type="text" placeholder="新分类名" maxlength="16"/>`;
+      html += `<input class="cat-input" id="cat-add-input" type="text" placeholder="${escapeHtml(T("stNewCatPh"))}" maxlength="16"/>`;
     } else {
-      html += `<button class="cat-add" id="cat-add-btn" type="button" title="添加分类">+</button>`;
+      html += `<button class="cat-add" id="cat-add-btn" type="button" title="${escapeHtml(T("stAddCat"))}">+</button>`;
     }
   }
   filtersEl.innerHTML = html;
@@ -1084,12 +1100,12 @@ function renderGrid(): void {
 
   let html = "";
   if (!editMode) {
-    html += `<div class="bubble eraser" data-id="__clear__">${SVG_CROSS}清除该角色全部 buff</div>`;
+    html += `<div class="bubble eraser" data-id="__clear__">${SVG_CROSS}${T("stClearAllBuffs")}</div>`;
     // Manage pill: drag onto a token, on release the capture
     // overlay broadcasts BC_OPEN_MANAGE → background opens a popover
     // anchored on the token listing its current buffs. From there
     // each buff is independently draggable to remove or transfer.
-    html += `<div class="bubble manage" data-id="__manage__">${SVG_WRENCH}管理该角色 buff</div>`;
+    html += `<div class="bubble manage" data-id="__manage__">${SVG_WRENCH}${T("stManageBuffs")}</div>`;
   }
   for (const b of list) {
     const fg = textColorFor(b.color);
@@ -1126,7 +1142,7 @@ function renderGrid(): void {
              </div>`;
   }
   if (editMode) {
-    html += `<div class="bubble add-pill" id="add-buff-pill">+ 新 buff</div>`;
+    html += `<div class="bubble add-pill" id="add-buff-pill">${T("stNewBuffPill")}</div>`;
   }
   gridEl.innerHTML = html;
 
@@ -1299,13 +1315,14 @@ window.addEventListener("keydown", async (e) => {
 
 // Display labels for the experimental effect modes. Drives both the
 // segmented picker in the popup AND the persistence on save.
-const EFFECT_LABELS: Array<{ id: BuffEffect; label: string; hint: string }> = [
-  { id: "default", label: "默认", hint: "静态气泡（不带特效）" },
-  { id: "float",   label: "漂浮", hint: "粒子从角色脚下随机漂浮上升" },
-  { id: "drop",    label: "下降", hint: "粒子从角色头顶随机降落" },
-  { id: "flicker", label: "闪烁", hint: "随机位置闪烁淡入淡出" },
-  { id: "curve",   label: "悠扬", hint: "曲线从角色背后散播（渲染于角色下方）" },
-  { id: "spread",  label: "扩散", hint: "同心圆扩散（渲染于角色下方）" },
+type I18nKey = Parameters<typeof t>[1];
+const EFFECT_LABELS: Array<{ id: BuffEffect; labelKey: I18nKey; hintKey: I18nKey }> = [
+  { id: "default", labelKey: "stFxDefault", hintKey: "stFxDefaultHint" },
+  { id: "float",   labelKey: "stFxFloat",   hintKey: "stFxFloatHint" },
+  { id: "drop",    labelKey: "stFxDrop",    hintKey: "stFxDropHint" },
+  { id: "flicker", labelKey: "stFxFlicker", hintKey: "stFxFlickerHint" },
+  { id: "curve",   labelKey: "stFxCurve",   hintKey: "stFxCurveHint" },
+  { id: "spread",  labelKey: "stFxSpread",  hintKey: "stFxSpreadHint" },
 ];
 
 function openEditPopup(id: string, anchor: HTMLElement): void {
@@ -1334,7 +1351,7 @@ function openEditPopup(id: string, anchor: HTMLElement): void {
     <button class="pop-fx-seg ${pendingEffect === e.id ? "on" : ""}"
             data-fx="${e.id}"
             type="button"
-            title="${escapeHtml(e.hint)}">${escapeHtml(e.label)}</button>
+            title="${escapeHtml(T(e.hintKey))}">${escapeHtml(T(e.labelKey))}</button>
   `).join("");
   const showImg = pendingEffect !== "default";
   // Effects UI is gated on STATUS_EFFECTS_ENABLED. While the
@@ -1345,13 +1362,13 @@ function openEditPopup(id: string, anchor: HTMLElement): void {
   // restores everything.
   const effectsBlock = STATUS_EFFECTS_ENABLED
     ? `
-    <div class="pop-fx-label">实验性 · 视觉特效（仅 GM / 桌面端）</div>
+    <div class="pop-fx-label">${escapeHtml(T("stFxLabel"))}</div>
     <div class="pop-fx-row">${fxButtons}</div>
     <div class="pop-row pop-img-row" style="${showImg ? "" : "display:none"}">
       <input class="pop-img-url" type="text"
              value="${escapeHtml(pendingImageUrl)}"
-             placeholder="粒子图片 URL（留空 = 默认）"/>
-      <button class="pop-img-pick" type="button" title="从 OBR 资源库选择">${SVG_FOLDER}</button>
+             placeholder="${escapeHtml(T("stFxParticleUrlPh"))}"/>
+      <button class="pop-img-pick" type="button" title="${escapeHtml(T("stFxPickFromLib"))}">${SVG_FOLDER}</button>
     </div>`
     : "";
   // 2026-05 — WebM effect. Built-in buffs: a 2-way 无 / 默认特效
@@ -1360,33 +1377,33 @@ function openEditPopup(id: string, anchor: HTMLElement): void {
   // scene → right-click → 以此创建状态" flow for arbitrary WebMs.
   const webmBlock = isBuiltInFx
     ? `
-    <div class="pop-fx-label">特效</div>
+    <div class="pop-fx-label">${escapeHtml(T("stEffectLabel"))}</div>
     <div class="pop-webm-seg-row">
-      <button class="pop-webm-seg ${pendingWebmAsset ? "" : "on"}" data-webm="none" type="button">无</button>
-      <button class="pop-webm-seg ${pendingWebmAsset ? "on" : ""}" data-webm="default" type="button">默认特效</button>
+      <button class="pop-webm-seg ${pendingWebmAsset ? "" : "on"}" data-webm="none" type="button">${escapeHtml(T("stWebmNone"))}</button>
+      <button class="pop-webm-seg ${pendingWebmAsset ? "on" : ""}" data-webm="default" type="button">${escapeHtml(T("stWebmDefault"))}</button>
     </div>
-    <div class="pop-webm-hint">想用其它预制 webm 当特效？把 webm 拖进场景，状态追踪打开时右键它选「以此创建状态」。</div>`
+    <div class="pop-webm-hint">${escapeHtml(T("stWebmHintBuiltin"))}</div>`
     : `
-    <div class="pop-fx-label">特效</div>
-    <div class="pop-webm-hint">自定义状态没有内置特效。想加特效？把 webm / 图片拖进场景，状态追踪打开时右键它选「以此创建状态」。</div>`;
+    <div class="pop-fx-label">${escapeHtml(T("stEffectLabel"))}</div>
+    <div class="pop-webm-hint">${escapeHtml(T("stWebmHintCustom"))}</div>`;
   popupEl.innerHTML = `
     <div class="pop-row">
       <input class="pop-color" type="color" value="${escapeHtml(buff.color)}"/>
-      <input class="pop-name" type="text" maxlength="20" value="${escapeHtml(buff.name)}" placeholder="名称"/>
+      <input class="pop-name" type="text" maxlength="20" value="${escapeHtml(buff.name)}" placeholder="${escapeHtml(T("stNamePh"))}"/>
     </div>
     <div class="pop-row rounds">
-      <span class="pop-rounds-label">持续轮数</span>
+      <span class="pop-rounds-label">${escapeHtml(T("stRoundsLabel"))}</span>
       <input class="pop-rounds" type="number" min="0" max="99" step="1"
              value="${buff.rounds ?? ""}" placeholder="0"/>
-      <span class="pop-rounds-label">0=不限</span>
+      <span class="pop-rounds-label">${escapeHtml(T("stRoundsUnlimited"))}</span>
     </div>
     ${effectsBlock}
     ${webmBlock}
     <div class="pop-row pop-actions">
-      <button class="pop-del" type="button">删除</button>
+      <button class="pop-del" type="button">${escapeHtml(T("stDelete"))}</button>
       <span style="flex:1"></span>
-      <button class="pop-cancel" type="button">取消</button>
-      <button class="pop-save" type="button">保存</button>
+      <button class="pop-cancel" type="button">${escapeHtml(T("stCancel"))}</button>
+      <button class="pop-save" type="button">${escapeHtml(T("stSave"))}</button>
     </div>
   `;
   // Position popup just below the anchor bubble, clamped inside the
@@ -1543,7 +1560,7 @@ function openEditPopup(id: string, anchor: HTMLElement): void {
   });
   cancel.addEventListener("click", close);
   del.addEventListener("click", async () => {
-    if (!window.confirm(`删除「${buff.name}」？`)) return;
+    if (!window.confirm(T("stDeleteBuffConfirm").replace("{name}", buff.name))) return;
     buffs = buffs.filter((b) => b.id !== id);
     await saveCatalog();
     close();
@@ -1581,7 +1598,7 @@ window.addEventListener("click", handleOutsidePopupClick, true);
 // === Edit-mode actions ======================================================
 
 async function onRenameCategory(oldName: string): Promise<void> {
-  const next = window.prompt(`重命名分类「${oldName}」（留空=删除）`, oldName);
+  const next = window.prompt(T("stRenameCatPrompt").replace("{name}", oldName), oldName);
   if (next === null) return;
   const trimmed = next.trim();
   if (trimmed === "") {
@@ -1591,10 +1608,10 @@ async function onRenameCategory(oldName: string): Promise<void> {
     // rename / reorder, so leaving zero named groups breaks the
     // create-buff-into-active-filter UX.)
     if (groupOrder.length <= 1) {
-      window.alert(`至少保留一个分组，无法删除「${oldName}」。`);
+      window.alert(T("stCatMinOne").replace("{name}", oldName));
       return;
     }
-    if (!window.confirm(`删除分类「${oldName}」？该分类下的 buff 会移到「${UNCATEGORIZED}」。`)) return;
+    if (!window.confirm(T("stCatDeleteConfirm").replace("{name}", oldName).replace("{uncat}", T("stCatUncategorized")))) return;
     for (const b of buffs) if ((b.group ?? UNCATEGORIZED) === oldName) b.group = undefined;
     groupOrder = groupOrder.filter((g) => g !== oldName);
     if (activeFilter === oldName) activeFilter = null;
@@ -1716,20 +1733,26 @@ function cssEscape(value: string): string {
 // Footer text is split into one line per affordance so each
 // reads on its own row inside the cramped 340px panel — much less
 // eye-strain than a long " · "-joined run-on string.
-const FOOT_APPLY_LINES = [
-  `<b>左键</b>拖到目标释放 = 应用 buff`,
-  `<b>右键</b>拖过角色 = 路径切换 (有则去)`,
-  `<b>左键</b>拖红色 ${SVG_CROSS}= 单个清除`,
-  `<b>右键</b>拖红色 ${SVG_CROSS}= 路径全清`,
-  `<kbd>]</kbd> 关闭面板`,
-];
-const FOOT_EDIT_LINES = [
-  `<b>点击</b>分类 = 重命名（清空 = 删除）`,
-  `<b>拖</b>分类 = 排序`,
-  `<b>点击</b> buff = 颜色 / 名字 / 特效编辑`,
-  `<b>拖</b> buff 到分类 = 切换分组`,
-  `<kbd>]</kbd> 退出编辑`,
-];
+// Built fresh per render() so a live language switch is reflected.
+// {x} = the inline red-cross SVG icon.
+function footApplyLines(): string[] {
+  return [
+    T("stFootApply1"),
+    T("stFootApply2"),
+    T("stFootApply3").replace("{x}", SVG_CROSS),
+    T("stFootApply4").replace("{x}", SVG_CROSS),
+    T("stFootApply5"),
+  ];
+}
+function footEditLines(): string[] {
+  return [
+    T("stFootEdit1"),
+    T("stFootEdit2"),
+    T("stFootEdit3"),
+    T("stFootEdit4"),
+    T("stFootEdit5"),
+  ];
+}
 
 function setFooter(lines: string[]): void {
   footEl.innerHTML = lines.map((l) => `<div class="foot-line">${l}</div>`).join("");
@@ -1740,13 +1763,13 @@ function render(): void {
     btnEdit.classList.add("on");
     document.body.classList.add("edit-mode");
     footEl.classList.add("edit-foot");
-    setFooter(FOOT_EDIT_LINES);
+    setFooter(footEditLines());
   } else {
     btnEdit.classList.remove("on");
     document.body.classList.remove("edit-mode");
     footEl.classList.remove("edit-foot");
     addCatPending = false;
-    setFooter(FOOT_APPLY_LINES);
+    setFooter(footApplyLines());
   }
   renderFilters();
   renderGrid();
@@ -1780,9 +1803,9 @@ function refreshRenderModeLabel(): void {
   if (!btnRenderMode) return;
   const mode = getStatusRenderMode();
   btnRenderMode.textContent =
-    mode === "effect" ? "特效" :
-    mode === "text"   ? "文字" :
-                        "自动";
+    mode === "effect" ? T("stRenderEffect") :
+    mode === "text"   ? T("stRenderText") :
+                        T("stRenderAuto");
   btnRenderMode.dataset.mode = mode;
 }
 refreshRenderModeLabel();
@@ -1863,7 +1886,7 @@ fileImport.addEventListener("change", async () => {
     const json = JSON.parse(text);
     const parsed = parseCatalog(json);
     if (!parsed) {
-      window.alert("JSON 文件格式错误：应为 buff 数组或 { buffs, groupOrder } 对象。");
+      window.alert(T("stImportBadJson"));
       return;
     }
     buffs = parsed.buffs;
@@ -1888,7 +1911,7 @@ fileImport.addEventListener("change", async () => {
     }
     render();
   } catch (e: any) {
-    window.alert(`导入失败：${e?.message ?? String(e)}`);
+    window.alert(T("stImportFailed").replace("{err}", e?.message ?? String(e)));
   }
 });
 
@@ -1896,6 +1919,15 @@ fileImport.addEventListener("change", async () => {
 
 OBR.onReady(async () => {
   installDebugOverlay();
+  // i18n — translate the static toolbar chrome once, then re-translate
+  // + re-render every dynamic surface whenever the language flips.
+  applyI18nDom(getLocalLang());
+  onLangChange((l) => {
+    applyI18nDom(l);
+    refreshRenderModeLabel();
+    renderPresets();
+    render();
+  });
   // 2026-05-16 — scale text + buff icons with palette size. Baseline
   // = PALETTE_W × PALETTE_H from statusTracker/index.ts.
   installPanelZoom({ baseWidth: 340, baseHeight: 544 });

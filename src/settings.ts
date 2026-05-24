@@ -137,6 +137,7 @@ const SUPPORTER_AVATARS: Record<string, string> = {
   "蚀星ErosionStar":             "supporter-avatars/蚀星Erosionstar.png",
   "跑冰风谷水群被抓的某位":      "supporter-avatars/跑冰风谷水群被抓的某位.png",
   "鱼喵":                        "supporter-avatars/鱼喵.png",
+  "克雷锰特":                    "supporter-avatars/克雷锰特.png",
 };
 
 function findSupporterAvatar(name: string): string | null {
@@ -1220,6 +1221,15 @@ function localFileRowHtml(f: LocalFileMeta, lang: Language): string {
   `;
 }
 
+// One-click preset: the official 5etools ENGLISH source repo, served via
+// jsDelivr (which sends `Access-Control-Allow-Origin: *`). 5e.tools itself is
+// now behind a Cloudflare bot challenge that returns 403 to programmatic
+// fetch(), and never sent CORS headers anyway — so it cannot be used as a
+// library base directly. This mirror exposes the canonical 5etools layout
+// (search/index.json + data/bestiary/index.json + data/spells/... + items),
+// is pure English (no translation), and matches our fetch paths exactly.
+const EN_5ETOOLS_BASE = "https://cdn.jsdelivr.net/gh/5etools-mirror-3/5etools-src@main";
+
 function renderLibrariesBody(lang: Language): string {
   const s = getState();
   const libs = s.libraries ?? [];
@@ -1227,6 +1237,7 @@ function renderLibrariesBody(lang: Language): string {
     ? `
       <div class="lib-warn">
         ⚠ <b>数据格式按 5etools 规范适配。</b>当前内置库为 kiwee.top（5etools 中文镜像）。你可以添加自己的库（自托管 / 公开 URL）。库必须提供与 5etools 相同的 JSON 结构（<code>search/index.json</code> + <code>data/&lt;file&gt;.json</code>）。所有启用的库会在搜索/图鉴里合并显示。<br>
+        <b>要英文原版？</b>点下方绿色 <b>「+ 英文原版 (5etools)」</b> 一键添加。注意：<code>5e.tools</code> 官网现已被 Cloudflare 人机验证拦截、且从不发送跨域头，<b>无法直接当库地址连接</b>；此预设走 jsDelivr 官方镜像（自带跨域，纯英文）。<br>
         <b>数据来源与协议：</b>内置库数据来自 5et 中文站 —— 代码主体与英文数据采用 MIT 协议，中文译文采用 CC BY-NC-SA 4.0 协议。使用其数据时请遵守协议并注明来源（署名 / 非商业 / 相同方式共享）。
       </div>
       <div class="lib-studio">
@@ -1237,6 +1248,7 @@ function renderLibrariesBody(lang: Language): string {
     : `
       <div class="lib-warn">
         ⚠ <b>Library data must follow the 5etools JSON schema.</b> The default built-in is kiwee.top (Chinese mirror). You can add custom libraries (self-hosted or public URLs) that expose the same shape (<code>search/index.json</code> + <code>data/&lt;file&gt;.json</code>). All enabled libraries are merged in search / bestiary results.<br>
+        <b>Need the English original?</b> Click the green <b>"+ English (5etools)"</b> button below. Note: <code>5e.tools</code> itself is now behind a Cloudflare bot challenge and never sends CORS headers, so it <b>cannot be used as a library URL directly</b>; this preset uses the official jsDelivr mirror (CORS-enabled, pure English).<br>
         <b>Source &amp; license:</b> the built-in library's data comes from the 5etools CN site — the code base and English data are under MIT, Chinese translations under CC BY-NC-SA 4.0. Follow the license and attribute the source when using its data (attribution / non-commercial / share-alike).
       </div>
       <div class="lib-studio">
@@ -1245,8 +1257,12 @@ function renderLibrariesBody(lang: Language): string {
       </div>
     `;
   const list = libs.map((l) => libraryRowHtml(l, lang, isGM)).join("");
+  const hasEn = libs.some((l) => l.baseUrl?.replace(/\/+$/, "") === EN_5ETOOLS_BASE);
+  const enBtn = hasEn
+    ? ""
+    : `<button class="lib-add-en-btn" type="button" title="${lang === "zh" ? "一键添加 5etools 官方英文源（jsDelivr 镜像，自带跨域，纯英文）。注：5e.tools 官网已被 Cloudflare 拦截，无法直接连接。" : "One-click add the official 5etools English source (jsDelivr mirror, CORS-enabled, pure English). Note: 5e.tools itself is now Cloudflare-blocked and cannot be used directly."}">${lang === "zh" ? "+ 英文原版 (5etools)" : "+ English (5etools)"}</button>`;
   const addBtn = isGM
-    ? `<button class="lib-add-btn" type="button">${lang === "zh" ? "+ 添加库" : "+ Add library"}</button>`
+    ? `<button class="lib-add-btn" type="button">${lang === "zh" ? "+ 添加库" : "+ Add library"}</button>${enBtn}`
     : `<p class="role-notice">${lang === "zh" ? "玩家端只读 · 由 DM 设置" : "Read-only · Set by DM"}</p>`;
 
   const tutorial = lang === "zh" ? `
@@ -1575,6 +1591,26 @@ function wireLibrariesBody(root: HTMLElement): void {
         id,
         name: name.trim(),
         baseUrl: baseUrl.trim().replace(/\/+$/, ""),
+        enabled: true,
+        builtin: false,
+      },
+    ];
+    await setState({ libraries: next });
+  });
+
+  // One-click preset: add the official 5etools English source. Idempotent —
+  // bail if a library with this exact baseUrl already exists.
+  root.querySelector<HTMLButtonElement>(".lib-add-en-btn")?.addEventListener("click", async () => {
+    if (!isGM) return;
+    const cur = getState().libraries ?? [];
+    if (cur.some((l) => l.baseUrl?.replace(/\/+$/, "") === EN_5ETOOLS_BASE)) return;
+    const lang = getLocalLang();
+    const next: LibraryConfig[] = [
+      ...cur,
+      {
+        id: `en5e-${Date.now()}`,
+        name: lang === "zh" ? "5etools 英文原版" : "5etools (English)",
+        baseUrl: EN_5ETOOLS_BASE,
         enabled: true,
         builtin: false,
       },
@@ -2735,51 +2771,68 @@ const TABS: TabDef[] = [
     },
   },
   {
+    // 2026-05-23 — RETIRED with project closure. The in-plugin module
+    // (popover + background audio engine + PeerJS pairing) is no longer
+    // registered in background.ts's modules map, so the toggle has
+    // been dropped (no `moduleId` here). The entry is kept visible so
+    // users can still find the link to the standalone web tool, which
+    // continues to work on its own.
     id: "musicBoard",
     zh: `${ICONS.music} 音乐板`,
     en: `${ICONS.music} Music Board`,
-    moduleId: "musicBoard",
     body: {
-      zh: `<h3>音乐板</h3>
-<p>左侧工具栏「音乐板 (听)」打开一个右上角弹窗：当前播放的 BGM、本地音量条、配对码输入。</p>
-<h4 style="margin-top:14px">怎么用（房主侧）</h4>
-<ol style="line-height:1.9">
-  <li>浏览器开 <a href="https://obr.dnd.center/studio/music-studio/" target="_blank" style="color:var(--accent)">obr.dnd.center/studio/music-studio/</a>（收藏起来）</li>
-  <li>网页点「配对枭熊」拿 6 位配对码（点击即复制）</li>
-  <li>OBR 左侧工具栏点「音乐板 (听)」按钮 → 弹窗里粘配对码 → 点「连接」</li>
-  <li>之后网页里所有操作（切歌 / 暂停 / 调音量）都写到 OBR scene metadata</li>
-</ol>
-<h4 style="margin-top:10px">怎么用（玩家侧）</h4>
-<p>玩家要听到音乐<b>必须自己打开本面板</b>（左侧工具栏点同一个按钮）—— 每个客户端各自本地拉流播放，不消耗房主带宽。打开过一次后，房主每次切歌玩家这边都会自动跟着切。</p>
-<h4 style="margin-top:10px">关键特性</h4>
-<ul>
-  <li><b>右上角「−」收起</b>：弹窗变成顶部小条，音乐继续放、配对继续保持。直接 ✕ 关掉弹窗会停音乐 + 断配对，所以日常用「−」就行</li>
-  <li><b>WebAudio 引擎</b>：淡入淡出 / 单曲循环边界平滑 / SFX 响时 BGM 自动降到 40% / master limiter 防爆耳</li>
-  <li><b>零服务器开销</b>：网页 ↔ 插件 PeerJS WebRTC 直连 P2P；音频玩家本地从 URL 拉，不走你服务器</li>
-  <li><b>每人本地音量</b>：BGM/SFX 各自独立音量条 + 静音，仅影响自己听到的</li>
-  <li><b>断线重连</b>：scene metadata 持久 —— 配对断了再连仍然从当前曲目位置继续</li>
+      zh: `<div style="margin:4px 0 14px;padding:14px 16px;border-radius:10px;
+            background:linear-gradient(180deg, rgba(245,166,35,0.16), rgba(231,76,60,0.08));
+            border:1px solid rgba(245,166,35,0.55);font-size:13px;line-height:1.75">
+  <div style="color:#f5a623;font-weight:700;font-size:13.5px;margin-bottom:6px">插件内的音乐板已停止维护</div>
+  <div style="color:var(--text)">
+    随项目封盘，<b>插件内嵌</b>的音乐板（侧栏图标 + 配对弹窗 + 后台音频引擎）已下线，不再随插件一起加载，也不会再消耗任何资源。<b>独立的网页版音乐板继续可用</b>，可作为一个普通网页播放器使用，不依赖本插件。
+  </div>
+</div>
+
+<h4 style="margin-top:14px">网页版音乐板（独立运行）</h4>
+<p>下面这个地址依然可以正常访问，<b>无需配对、无需插件</b>，浏览器打开即用：</p>
+<p style="margin:10px 0">
+  <a href="https://obr.dnd.center/studio/music-studio/" target="_blank" rel="noopener"
+     style="display:inline-block;padding:8px 14px;border-radius:8px;
+            background:linear-gradient(180deg, var(--accent), var(--accent-dim));
+            color:#fff;text-decoration:none;font-weight:600;font-size:13px">
+    🎵 打开网页版音乐板 →
+  </a>
+</p>
+<ul style="line-height:1.8;color:var(--text-dim);font-size:12px">
+  <li>整理 BGM / SFX 曲库（在线直链 + 本地文件均可）</li>
+  <li>WebAudio 引擎：淡入淡出、单曲循环边界平滑、SFX 自动 ducking</li>
+  <li>本地播放：开语音时可直接共享电脑音频给玩家，不再走 OBR 同步</li>
+  <li>原有「与插件配对让所有玩家同步」的功能不再可用；如需此能力请自行下载源码自行部署</li>
 </ul>
-<h4 style="margin-top:10px">默认曲库</h4>
-<p>网页点「默认曲库」一键导入服务器自带 154 首 BGM/SFX（约 108 MB，OPUS 64k mono，按 17 个文件夹分类自动打 tag）。</p>
-<p style="color:var(--text-dim);font-size:11.5px">看不到按钮？刷新 OBR 房间；或这里把模块开关 off → on 强制重新注册。</p>`,
-      en: `<h3>Music Board</h3>
-<p>The left-sidebar "Music Board (Listen)" tool opens a small popover showing the currently-playing BGM, per-client volume, and the pair-code input.</p>
-<h4 style="margin-top:14px">How to use</h4>
-<ol style="line-height:1.9">
-  <li>Open <a href="https://obr.dnd.center/studio/music-studio/" target="_blank" style="color:var(--accent)">obr.dnd.center/studio/music-studio/</a> (the music board web tool — bookmark it)</li>
-  <li>Click "配对枭熊" / "Pair OBR" to generate a 6-char code (click to copy)</li>
-  <li>In OBR, click the Music Board sidebar tool, paste the code, click Connect</li>
-  <li>All web-side actions (track switch, pause, volume) now sync to OBR; every player's client streams the same URL locally</li>
-</ol>
-<h4 style="margin-top:10px">Key features</h4>
-<ul>
-  <li><b>Closing the popover doesn't stop music</b>: the audio engine lives in the plugin background; the popover is just a viewer.</li>
-  <li><b>WebAudio engine</b>: auto fade-in/out (including across loop boundaries), SFX-triggered BGM ducking, master limiter</li>
-  <li><b>Zero server load</b>: PeerJS WebRTC P2P between web and plugin; audio is fetched per-client from the source URL</li>
-  <li><b>Per-client volume</b>: BGM/SFX sliders + mute, affect only your own audio</li>
+<p style="color:var(--text-dim);font-size:11.5px;margin-top:10px">如确实希望恢复插件内嵌的同步功能，可在 GitHub 仓库自行编译部署（参考开源协议）。</p>`,
+      en: `<div style="margin:4px 0 14px;padding:14px 16px;border-radius:10px;
+            background:linear-gradient(180deg, rgba(245,166,35,0.16), rgba(231,76,60,0.08));
+            border:1px solid rgba(245,166,35,0.55);font-size:13px;line-height:1.7">
+  <div style="color:#f5a623;font-weight:700;font-size:13.5px;margin-bottom:6px">In-plugin Music Board is retired</div>
+  <div style="color:var(--text)">
+    With the project closure, the <b>in-plugin</b> music board (sidebar tool + pairing popover + background audio engine) is no longer wired in; it doesn't load and consumes no resources. The <b>standalone web tool</b> still works as a regular browser-side player, independent of this plugin.
+  </div>
+</div>
+
+<h4 style="margin-top:14px">Web Music Board (standalone)</h4>
+<p>The link below still works — <b>no pairing, no plugin needed</b>, just open it in a browser:</p>
+<p style="margin:10px 0">
+  <a href="https://obr.dnd.center/studio/music-studio/" target="_blank" rel="noopener"
+     style="display:inline-block;padding:8px 14px;border-radius:8px;
+            background:linear-gradient(180deg, var(--accent), var(--accent-dim));
+            color:#fff;text-decoration:none;font-weight:600;font-size:13px">
+    🎵 Open Web Music Board →
+  </a>
+</p>
+<ul style="line-height:1.8;color:var(--text-dim);font-size:12px">
+  <li>Organize BGM / SFX library (online links + local files)</li>
+  <li>WebAudio engine: fade in/out, seamless loop boundaries, SFX-triggered ducking</li>
+  <li>Local playback: share your computer audio over voice chat — no OBR sync needed</li>
+  <li>The "pair-with-plugin so all players hear sync'd audio" feature is no longer available; self-host from source if you need it</li>
 </ul>
-<h4 style="margin-top:10px">Default catalog</h4>
-<p>The web tool's "默认曲库" / "Default Catalog" button pulls 154 OPUS-encoded BGM/SFX tracks (~108 MB) from the server.</p>`,
+<p style="color:var(--text-dim);font-size:11.5px;margin-top:10px">If you really want the in-plugin sync back, you can self-build from the GitHub repo (follow the license terms).</p>`,
     },
   },
   {

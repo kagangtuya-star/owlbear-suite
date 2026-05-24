@@ -50,6 +50,13 @@ const PICKER_TARGET_ITEM_IDS: string[] = (() => {
 })();
 const PICKER_TARGET_ITEM = PICKER_TARGET_ITEM_IDS[0] || null;
 const PICKER_IS_GROUP = PICKER_TARGET_ITEM_IDS.length > 1;
+// 2026-05-21 — 变身 (transform) mode: the panel is opened by the
+// transform module with ?transformForItemId=<id>. Picking a monster
+// here does NOT bind/spawn — it hands the chosen monster's token image
+// + size to the transform module, which snapshots the token and swaps
+// it (revertible). Reuses the whole monster-search UI for free.
+const TRANSFORM_TARGET_ITEM_ID = URL_PARAMS.get("transformForItemId") || null;
+const BC_TRANSFORM_PICK = "com.obr-suite/transform:pick";
 
 async function ensureSharedMonsterData(slug: string, raw: any): Promise<void> {
   if (!raw) return;
@@ -403,6 +410,26 @@ function App() {
   // from the suite Settings panel (dataVersion in scene metadata).
 
   const handleSpawn = useCallback(async (mon: ParsedMonster) => {
+    if (TRANSFORM_TARGET_ITEM_ID) {
+      // 变身 mode — hand the monster's token image + size to the
+      // transform module (it snapshots the token, swaps, and closes
+      // this picker). No bind, no spawn.
+      try {
+        await OBR.broadcast.sendMessage(
+          BC_TRANSFORM_PICK,
+          {
+            itemId: TRANSFORM_TARGET_ITEM_ID,
+            tokenUrl: mon.tokenUrl || "",
+            size: mon.size || "",
+            name: mon.name || mon.engName || "变身形态",
+          },
+          { destination: "LOCAL" },
+        );
+      } catch (e) {
+        console.warn("[bestiary] transform-pick broadcast failed", e);
+      }
+      return;
+    }
     if (PICKER_TARGET_ITEM_IDS.length > 0) {
       // Both single-bind and group-bind paths come through here. The
       // group-bind URL ships >1 id and we apply the chosen monster to
@@ -419,7 +446,7 @@ function App() {
   // mode (cc-bind etc.) doesn't accept drag-spawn — only the regular
   // bestiary panel does.
   useEffect(() => {
-    if (PICKER_TARGET_ITEM_IDS.length > 0) return;
+    if (PICKER_TARGET_ITEM_IDS.length > 0 || TRANSFORM_TARGET_ITEM_ID) return;
     const unsub = OBR.broadcast.onMessage(BC_MONSTER_DROP, async (event) => {
       const data = event.data as
         | { slug?: string; sceneX?: number; sceneY?: number }

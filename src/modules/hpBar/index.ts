@@ -17,6 +17,7 @@
 // panelLayout system.
 
 import OBR from "@owlbear-rodeo/sdk";
+import { getLocalLang } from "../../state";
 import { assetUrl } from "../../asset-base";
 import { onViewportResize } from "../../utils/viewportAnchor";
 import {
@@ -271,6 +272,7 @@ function isCcAutoPopupOn(): boolean {
 }
 
 export async function setupHpBar(): Promise<void> {
+  const en = getLocalLang() === "en";
   try { hpBarIsGM = (await OBR.player.getRole()) === "GM"; } catch {}
   try { hpBarPlayerId = await OBR.player.getId(); } catch {}
   // Bbox for layout editor / drag preview.
@@ -297,7 +299,7 @@ export async function setupHpBar(): Promise<void> {
       icons: [
         {
           icon: assetUrl("status-icon.svg"),
-          label: "添加血条组件",
+          label: en ? "Add HP bar" : "添加血条组件",
           filter: {
             // 2026-05-10c — dropped the BESTIARY_SLUG / CC_BIND
             // exclusions in `every`. Now that the hp-bar popover
@@ -361,7 +363,7 @@ export async function setupHpBar(): Promise<void> {
       icons: [
         {
           icon: assetUrl("status-icon.svg"),
-          label: "移除血条组件",
+          label: en ? "Remove HP bar" : "移除血条组件",
           filter: {
             every: [
               { key: "type", value: "IMAGE" },

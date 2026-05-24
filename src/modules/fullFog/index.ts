@@ -15,6 +15,7 @@
 
 import OBR, { isPath, type Item } from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../asset-base";
+import { getLocalLang } from "../../state";
 import { CTX_EDIT_FOG, MODAL_ID, PLUGIN_ID, FOG_PATH_KEY, FOG_WALL_EXPAND_KEY } from "./types";
 import { buildFogWalls } from "./output/obrWalls";
 import { samplePathCommands } from "./output/samplePath";
@@ -230,6 +231,7 @@ async function openEditor(mapItemId: string): Promise<void> {
 
 export async function setupFullFog(): Promise<void> {
   if (registered) return;
+  const en = getLocalLang() === "en";
   let role: "GM" | "PLAYER" = "PLAYER";
   try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
 
@@ -242,7 +244,7 @@ export async function setupFullFog(): Promise<void> {
         id: CTX_EDIT_FOG,
         icons: [{
           icon: ICON_URL,
-          label: "编辑地图迷雾",
+          label: en ? "Edit map fog" : "编辑地图迷雾",
           filter: {
             every: [
               { key: "type", value: "IMAGE" },

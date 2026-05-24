@@ -22,10 +22,40 @@
  */
 import OBR from "@owlbear-rodeo/sdk";
 import { bindPanelDrag } from "./utils/panelDrag";
+import { applyI18nDom, t } from "./i18n";
+import { getLocalLang, onLangChange } from "./state";
+
+// Active UI language for this popover. Static text is translated via
+// data-i18n attributes (applyI18nDom); dynamic strings (pair status,
+// toasts, now-playing) go through T(). The module script is deferred
+// (end of body), so the DOM is ready — translate immediately.
+let lang = getLocalLang();
+const T = (k: Parameters<typeof t>[1]) => t(lang, k);
+try { applyI18nDom(lang); } catch {}
+// Live language switching (DM toggles language in Settings).
+onLangChange((l) => {
+  lang = l;
+  try { applyI18nDom(lang); } catch {}
+  try { renderUI(); } catch {}
+});
 
 const META_KEY = "com.obr-suite/music-board:state";
 const LS_VOL   = "obr-music-board:local-volumes";
 const LS_PAIR  = "obr-music-board:last-pair-code";
+// "Connection intent" — TRUE once the DM successfully pairs, FALSE on
+// manual disconnect. Persisted so it survives the close+reopen that a
+// minimize/expand triggers. requestResize reads it to decide whether
+// the reopened iframe should auto-reconnect — WITHOUT gating on the
+// live `peerConn`, which may momentarily be null mid-reconnect (that
+// gating was the root cause of the "expand → 未连接" bug).
+const LS_INTENT = "obr-music-board:conn-intent";
+// Minimize/expand MUST close+reopen the popover: OBR.popover.setWidth/
+// setHeight only change the VISUAL size — the iframe's pointer hit-test
+// region stays at the opened dimensions, so a CSS/visual shrink keeps
+// blocking canvas clicks. Only a real close+reopen at the new size
+// frees the click area. So the popover asks background (BC_RESIZE) to
+// do the close+reopen; background re-anchors + re-pairs.
+const BC_RESIZE = "com.obr-suite/music-board:resize";
 
 interface MusicState {
   bgm: BgmEntry | null;
@@ -69,6 +99,18 @@ const toastStack  = $("#toastStack");
 const params = new URLSearchParams(location.search);
 const role: "GM" | "PLAYER" = params.get("role") === "PLAYER" ? "PLAYER" : "GM";
 const bootMinimized = params.get("mini") === "1";
+// `?auto=1` — background appended this when re-opening after a resize
+// while we had an active pair. The popover auto-clicks Connect once
+// the DOM has settled (GM only — players don't pair).
+const bootAutoReconnect = params.get("auto") === "1";
+// `?resize=1` — this open is a resize / drag re-open of an EXISTING
+// session (not a fresh open). The DM normally skips the boot
+// scene-metadata read (to avoid showing stale tracks from an old
+// session), but on a resize re-open the metadata is the CURRENT
+// session's live state, so we DO read it — that's what repopulates the
+// now-playing card immediately instead of flashing "没有音乐在播放"
+// until the peer reconnect lands.
+const isResizeReopen = params.get("resize") === "1";
 appEl.classList.toggle("role-player", role === "PLAYER");
 
 // ---- Local volume ---------------------------------------------------
@@ -153,6 +195,10 @@ const sfxAudios = new Map<string, HTMLAudioElement>();
 // have to clean up. With the flag, we just stage src+currentTime
 // while locked, then unlock fires play() with a valid gesture credit.
 let audioUnlocked = false;
+// Timestamp of the most recent first-gesture audio unlock. The mini
+// vinyl tap handler uses it to tell "this tap just unlocked audio"
+// (→ don't also resize) from "audio was already unlocked" (→ expand).
+let lastUnlockAt = 0;
 function tryPlay(a: HTMLAudioElement): Promise<void> {
   if (!audioUnlocked) return Promise.resolve();
   return a.play().catch(() => {});
@@ -232,7 +278,7 @@ async function applyState(next: MusicState) {
           rampGain(c.fadeGain, 1, FADE_IN_MS);
           updateDucking();
         } catch {
-          toast("浏览器拦截了自动播放，请点击页面任意位置允许", "warn");
+          toast(T("mbToastAutoplay"), "warn");
         }
       }
       // If locked OR paused: just leave bgmAudio paused with src loaded.
@@ -283,25 +329,47 @@ async function applyState(next: MusicState) {
     }
   }
   for (const s of next.sfx) {
-    if (!sfxAudios.has(s.id)) {
-      const a = new Audio(s.url);
-      a.preload = "auto"; a.crossOrigin = "anonymous"; a.loop = !!s.loop;
-      a.addEventListener("ended", () => {
-        if (!a.loop) { sfxAudios.delete(s.id); updateDucking(); }
-      });
-      sfxAudios.set(s.id, a);
-      if (audioUnlocked) {
-        try {
-          await getCtx().resume();
-          const c = ensureChain(a, "sfx");
-          rampGain(c.fadeGain, 0, 0);
-          await a.play();
-          rampGain(c.fadeGain, 1, FADE_IN_MS);
-          updateDucking();
-        } catch {}
-      }
-      // If locked: SFX is queued (paused). unlock will retry play.
+    // Resurrection guard. CREATE+PLAY only a GENUINELY new SFX — one
+    // that is neither currently live (`sfxAudios`) NOR already seen
+    // before (`lastSfxIds`). Without the lastSfxIds half, a one-shot
+    // that FINISHED (removed from sfxAudios in its `ended` handler) but
+    // still lingered in the scene-metadata sfx[] array would be
+    // re-created and replayed on EVERY later applyState — and
+    // applyState fires on ANY studio operation (bgm change, volume,
+    // …), not just SFX. That was the "第一个 SFX 被记住，之后任何操作都
+    //触发一下历史 SFX 并堆叠" bug. The studio sends a fresh uuid per
+    // play, so legitimately re-triggering the SAME sound is a new id
+    // and still plays.
+    if (sfxAudios.has(s.id) || lastSfxIds.has(s.id)) continue;
+    const a = new Audio(s.url);
+    a.preload = "auto"; a.crossOrigin = "anonymous"; a.loop = !!s.loop;
+    a.addEventListener("ended", () => {
+      if (a.loop) return;
+      sfxAudios.delete(s.id);
+      // Prune the finished one-shot from local state so the next
+      // applyState no longer sees it as "desired". KEEP its id in
+      // lastSfxIds (the guard above relies on it) — the metadata write
+      // below (and the next op's removal loop) clears it there.
+      currentState.sfx = currentState.sfx.filter((x) => x.id !== s.id);
+      // The paired GM is the sole authoritative metadata writer; push
+      // the pruned state so late-joiners / re-syncs don't resurrect
+      // the finished SFX either. Players (no peerConn) only prune
+      // locally — they never write.
+      if (peerConn) void writeSceneMusic(currentState);
+      updateDucking();
+    });
+    sfxAudios.set(s.id, a);
+    if (audioUnlocked) {
+      try {
+        await getCtx().resume();
+        const c = ensureChain(a, "sfx");
+        rampGain(c.fadeGain, 0, 0);
+        await a.play();
+        rampGain(c.fadeGain, 1, FADE_IN_MS);
+        updateDucking();
+      } catch {}
     }
+    // If locked: SFX is queued (paused). unlock will retry play.
   }
   lastSfxIds = desired;
 }
@@ -395,20 +463,24 @@ function setPairStatus(text: string, kind: "" | "live" | "connecting" | "error" 
 }
 async function connectPeer(code: string) {
   try {
-    setPairStatus("加载 PeerJS…", "connecting");
+    setPairStatus(T("mbStLoadingPeer"), "connecting");
     const Peer = await loadPeerJs();
     if (peer) try { peer.destroy(); } catch {}
-    setPairStatus("连接信令…", "connecting");
+    setPairStatus(T("mbStSignaling"), "connecting");
     peer = new Peer();
     peer.on("open", () => {
-      setPairStatus("拨号 " + code + "…", "connecting");
+      setPairStatus(`${T("mbStDialing")} ${code}…`, "connecting");
       const conn = peer.connect(PEER_PREFIX + code.toUpperCase(), { reliable: true });
       peerConn = conn;
       conn.on("open", () => {
-        setPairStatus("已连接 " + code, "live");
-        toast(`已连接到网页音乐板 ${code}`, "ok");
+        setPairStatus(`${T("mbStConnectedTo")} ${code}`, "live");
+        toast(`${T("mbToastConnected")} ${code}`, "ok");
         pairBtn.style.display = "none";
         unpairBtn.style.display = "";
+        // Remember the DM wants to be connected — survives the
+        // close+reopen of a minimize/expand so the new iframe knows to
+        // auto-reconnect.
+        try { localStorage.setItem(LS_INTENT, "1"); } catch {}
         // HARD STOP before studio's broadcastCurrentState lands.
         // No stale BGM/SFX from previous sessions can leak through.
         hardStop();
@@ -416,7 +488,7 @@ async function connectPeer(code: string) {
       });
       conn.on("data", (data: any) => handlePeerMessage(data));
       conn.on("close", () => {
-        setPairStatus("已断开", "error");
+        setPairStatus(T("mbStDisconnected"), "error");
         pairBtn.style.display = "";
         unpairBtn.style.display = "none";
         // Studio tab closed / network blip — stop everything locally
@@ -425,42 +497,57 @@ async function connectPeer(code: string) {
         void writeSceneMusic(structuredClone(DEFAULT_STATE));
       });
       conn.on("error", (e: any) => {
-        setPairStatus("连接错误", "error");
-        toast("连接失败：" + (e?.message || e), "error");
+        setPairStatus(T("mbStConnError"), "error");
+        toast(T("mbToastConnFail") + (e?.message || e), "error");
       });
     });
     peer.on("error", (e: any) => {
-      setPairStatus("信令错误", "error");
-      toast("PeerJS：" + (e?.type || e?.message || e), "error");
+      setPairStatus(T("mbStSignalError"), "error");
+      toast(T("mbToastPeerErr") + (e?.type || e?.message || e), "error");
       pairBtn.style.display = "";
       unpairBtn.style.display = "none";
     });
   } catch (e: any) {
-    setPairStatus("加载失败", "error");
-    toast("加载 PeerJS 失败：" + (e?.message || e), "error");
+    setPairStatus(T("mbStLoadFail"), "error");
+    toast(T("mbToastLoadPeerFail") + (e?.message || e), "error");
   }
 }
 function disconnectPeer() {
   if (peerConn) try { peerConn.close(); } catch {}
   if (peer) try { peer.destroy(); } catch {}
   peer = null; peerConn = null;
-  setPairStatus("未连接", "");
+  // Manual disconnect = the DM no longer wants to be connected, so a
+  // later minimize/expand must NOT auto-reconnect.
+  try { localStorage.setItem(LS_INTENT, "0"); } catch {}
+  setPairStatus(T("mbStNotConnected"), "");
   pairBtn.style.display = "";
   unpairBtn.style.display = "none";
+}
+// Only accept http(s) media URLs from a peer. A malicious peer (if it
+// learned/guessed the pair code) could otherwise push an arbitrary URL
+// straight into <audio>.src — `data:` / `blob:` / `javascript:` /
+// relative — forcing a cross-origin load (IP leak) or a crafted media
+// payload at the browser decoder. Returns "" when unsafe.
+function safeMediaUrl(u: unknown): string {
+  const s = typeof u === "string" ? u.trim() : "";
+  return /^https?:\/\//i.test(s) ? s : "";
 }
 function handlePeerMessage(msg: any) {
   console.info("[music-board] peer msg", msg?.type);
   if (!msg || typeof msg !== "object") return;
   const next = structuredClone(currentState);
   switch (msg.type) {
-    case "bgm-load":
+    case "bgm-load": {
+      const url = safeMediaUrl(msg.url);
+      if (!url) break; // reject empty / non-http(s) URLs from the peer
       next.bgm = {
-        url: String(msg.url ?? ""), name: String(msg.name ?? "未命名"),
+        url, name: String(msg.name ?? "未命名"),
         loop: !!msg.loop,
         position: typeof msg.position === "number" ? msg.position : 0,
         startedAt: Date.now(), paused: false,
       };
       break;
+    }
     case "bgm-play":
       if (next.bgm) {
         next.bgm.startedAt = Date.now();
@@ -482,14 +569,16 @@ function handlePeerMessage(msg: any) {
       break;
     case "bgm-stop":
       next.bgm = null; break;
-    case "sfx-add":
-      if (msg.id && msg.url) {
+    case "sfx-add": {
+      const url = safeMediaUrl(msg.url);
+      if (msg.id && url) {
         next.sfx = next.sfx.filter((s) => s.id !== msg.id);
-        next.sfx.push({ id: String(msg.id), url: String(msg.url),
+        next.sfx.push({ id: String(msg.id), url,
           name: String(msg.name ?? "SFX"), loop: !!msg.loop });
         if (next.sfx.length > 4) next.sfx = next.sfx.slice(-4);
       }
       break;
+    }
     case "sfx-stop":
       if (msg.id) next.sfx = next.sfx.filter((s) => s.id !== msg.id);
       break;
@@ -519,12 +608,12 @@ function renderUI() {
   const playing = !!(bgm && !bgm.paused);
   if (bgm) {
     npCard.classList.toggle("playing", playing);
-    npStatus.textContent = playing ? "正在播放" : "已暂停";
-    npTitle.textContent = bgm.name || "未命名 BGM";
+    npStatus.textContent = playing ? T("mbStatusPlaying") : T("mbStatusPaused");
+    npTitle.textContent = bgm.name || T("mbUnnamedBgm");
   } else {
     npCard.classList.remove("playing");
-    npStatus.textContent = "空闲";
-    npTitle.textContent = "没有 BGM 在播放";
+    npStatus.textContent = T("mbStatusIdle");
+    npTitle.textContent = T("mbNoBgm");
     npTime.textContent = "--:-- / --:--";
   }
   if (miniBar) miniBar.classList.toggle("playing", playing);
@@ -539,18 +628,49 @@ setInterval(() => {
 }, 500);
 
 // ---- Minimize toggle ------------------------------------------------
-let minimized = false;
-function setMinimized(state: boolean) {
-  minimized = state;
+//
+// (1) CSS-swap the inner layout instantly. (2) ask background to
+// close+reopen the popover at the new dims (BC_RESIZE) — required
+// because OBR's iframe hit-test region only changes on a real reopen,
+// not via setWidth/setHeight. requestResize carries the pair code so
+// background can re-pair the new iframe.
+function setMinimizedCss(state: boolean) {
   if (state) appEl.classList.add("minimized");
   else       appEl.classList.remove("minimized");
 }
-setMinimized(bootMinimized);
-minimizeBtn?.addEventListener("click", () => setMinimized(true));
-miniExpand?.addEventListener("click", () => setMinimized(false));
+function requestResize(mini: boolean) {
+  setMinimizedCss(mini);
+  // Pass the pair code whenever the DM INTENDS to be connected — read
+  // the persisted intent flag, NOT the live peerConn (which can be
+  // momentarily null mid-reconnect; gating on it dropped ?auto=1 and
+  // left the expanded popover stuck on "未连接", the reported bug).
+  let intent = false;
+  try { intent = localStorage.getItem(LS_INTENT) === "1"; } catch {}
+  const pairCode = intent && lastPairCode ? lastPairCode : "";
+  try {
+    OBR.broadcast.sendMessage(
+      BC_RESIZE,
+      { mini, pairCode },
+      { destination: "LOCAL" },
+    );
+  } catch (e) {
+    console.warn("[music-board] BC_RESIZE failed", e);
+  }
+}
+setMinimizedCss(bootMinimized);
+minimizeBtn?.addEventListener("click", () => requestResize(true));
+miniExpand?.addEventListener("click",  () => requestResize(false));
+// Mini vinyl tap. CRITICAL for mobile: the FIRST tap must only unlock
+// audio (handled by the capture-phase unlockAudio listener on the SAME
+// tap, in this still-alive iframe). If that first tap ALSO triggered a
+// resize (close+reopen), the freshly-unlocked iframe would be torn down
+// and the new one would be locked again — which is exactly why mobile
+// players "couldn't play until the DM reconnected". So: if this tap
+// just unlocked audio, do NOT resize; a later tap expands.
 miniBar?.addEventListener("click", (e) => {
   if (e.target === miniExpand) return;
-  setMinimized(false);
+  if (Date.now() - lastUnlockAt < 600) return; // this tap was the unlock
+  requestResize(false);
 });
 
 // ---- Volume + pair wiring ------------------------------------------
@@ -577,7 +697,7 @@ pairCodeEl.addEventListener("input", () => {
 pairCodeEl.addEventListener("keydown", (e) => { if (e.key === "Enter") pairBtn.click(); });
 pairBtn.addEventListener("click", () => {
   const code = pairCodeEl.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (code.length < 4) { toast("配对码至少 4 位", "warn"); return; }
+  if (code.length < 4) { toast(T("mbToastCodeShort"), "warn"); return; }
   lastPairCode = code;
   try { localStorage.setItem(LS_PAIR, code); } catch {}
   void connectPeer(code);
@@ -599,46 +719,66 @@ function toast(text: string, kind: "ok" | "warn" | "error" | "" = "") {
 
 // ---- First-gesture audio unlock ------------------------------------
 //
-// One-shot capture-phase listener. After it fires:
-//   1. ctx.resume()
-//   2. retry .play() on existing audio elements that SHOULD be playing
-//      per currentState (we never replay state — that's what caused
-//      the minimize-resurrects-stale-music bug).
+// One-shot capture-phase listener. CRITICAL for mobile: iOS / Android
+// browsers only honour audio.play() when it is called SYNCHRONOUSLY
+// inside the gesture handler. The previous version did
+// `await getCtx().resume()` BEFORE `await audio.play()` — the await
+// detaches play() from the gesture, so iOS Safari rejected it and the
+// player heard nothing until a DM reconnect happened to land a fresh
+// gesture window. We now:
+//   1. Call ctx.resume() WITHOUT awaiting (fire-and-forget).
+//   2. Call audio.play() synchronously and attach the fade to the
+//      returned promise (.then), never awaiting before the next play().
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
+  lastUnlockAt = Date.now();
   document.removeEventListener("click", unlockAudio, true);
   document.removeEventListener("touchstart", unlockAudio, true);
-  void (async () => {
-    try { await getCtx().resume(); } catch {}
-    // BGM: retry only if state says it should be playing AND src is set.
-    if (currentState.bgm && !currentState.bgm.paused && bgmAudio.paused && bgmAudio.src) {
-      try {
-        const c = ensureChain(bgmAudio, "bgm");
-        rampGain(c.fadeGain, 0, 0);
-        await bgmAudio.play();
+  // Resume the context — do NOT await; we must keep the call stack
+  // synchronous so the play() calls below stay within the gesture.
+  try { void getCtx().resume(); } catch {}
+  // BGM: retry only if state says it should be playing AND src is set.
+  if (currentState.bgm && !currentState.bgm.paused && bgmAudio.paused && bgmAudio.src) {
+    try {
+      const c = ensureChain(bgmAudio, "bgm");
+      rampGain(c.fadeGain, 0, 0);
+      const p = bgmAudio.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => rampGain(c.fadeGain, 1, FADE_IN_MS)).catch(() => {});
+      } else {
         rampGain(c.fadeGain, 1, FADE_IN_MS);
+      }
+    } catch {}
+  }
+  // SFX: retry only ones currently in sfxAudios (stale entries were
+  // already sync-deleted by applyState).
+  for (const a of sfxAudios.values()) {
+    if (a.paused && a.src) {
+      try {
+        const c = ensureChain(a, "sfx");
+        rampGain(c.fadeGain, 0, 0);
+        const p = a.play();
+        if (p && typeof p.then === "function") {
+          p.then(() => rampGain(c.fadeGain, 1, FADE_IN_MS)).catch(() => {});
+        } else {
+          rampGain(c.fadeGain, 1, FADE_IN_MS);
+        }
       } catch {}
     }
-    // SFX: retry only ones currently in sfxAudios (stale entries
-    // were already sync-deleted by applyState).
-    for (const a of sfxAudios.values()) {
-      if (a.paused && a.src) {
-        try {
-          const c = ensureChain(a, "sfx");
-          rampGain(c.fadeGain, 0, 0);
-          await a.play();
-          rampGain(c.fadeGain, 1, FADE_IN_MS);
-        } catch {}
-      }
-    }
-    updateDucking();
-  })();
+  }
+  updateDucking();
 }
 document.addEventListener("click",     unlockAudio, true);
 document.addEventListener("touchstart", unlockAudio, true);
 
 // ---- Drag handle wiring --------------------------------------------
+// Full mode: left-edge hi-fi side panel = drag target.
+// Mini mode: turntable plinth wraps the vinyl = drag target. The vinyl
+// button is a CHILD of the plinth so a pointerdown on the vinyl would
+// otherwise bubble up to the plinth and start a drag — defeating the
+// click-to-expand affordance. Stopping propagation at the vinyl level
+// keeps the two gestures cleanly separated.
 if (dragHandle) {
   try { bindPanelDrag(dragHandle, "music-board"); } catch (e) {
     console.warn("[music-board] bindPanelDrag failed", e);
@@ -649,17 +789,27 @@ if (dragHandleMini) {
     console.warn("[music-board] bindPanelDrag (mini) failed", e);
   }
 }
+if (miniBar) {
+  miniBar.addEventListener("pointerdown", (e) => {
+    // Don't propagate to the plinth's drag listener — vinyl is for
+    // unlocking/expanding, not dragging. The click event still fires &
+    // bubbles, so the miniBar click handler (unlock-then-expand) works.
+    e.stopPropagation();
+  });
+}
 
 // ---- Boot ----------------------------------------------------------
 OBR.onReady(async () => {
   try { await OBR.scene.isReady(); } catch {}
 
-  // PLAYER reads boot metadata so mid-session join shows current track.
-  // GM SKIPS boot read — they pair fresh and the studio sends live state
-  // on connect; any stale entries from a previous session would just
-  // mislead the DM (and play silently into a locked context until
-  // their first click anyway).
-  if (role === "PLAYER") {
+  // PLAYER always reads boot metadata so a mid-session join shows the
+  // current track. GM normally SKIPS it (a fresh pairing sends live
+  // state, and stale entries from an old session would mislead) — BUT
+  // on a resize / drag RE-open (?resize=1) the metadata is the CURRENT
+  // session's live state, so the GM reads it too. That's what
+  // repopulates the now-playing card the instant the popover expands,
+  // instead of flashing "没有音乐在播放" until the peer reconnect lands.
+  if (role === "PLAYER" || isResizeReopen) {
     const s = await readSceneMusic();
     await applyState(s);
   }
@@ -670,4 +820,37 @@ OBR.onReady(async () => {
     const next = normaliseState(raw as Partial<MusicState>);
     if (next.ts >= currentState.ts) void applyState(next);
   });
+
+  // ---- Auto-reconnect after a resize close+reopen ------------------
+  //
+  // Triggered by `?auto=1` URL param appended by background when we
+  // were paired before the resize. Safety checks:
+  //   1. GM only — players don't pair.
+  //   2. We have a saved pair code (re-read from localStorage in
+  //      case the LS write from a previous iframe was async).
+  //   3. We're not ALREADY connected (paranoia — should be impossible
+  //      since the iframe is brand-new, but a guard is cheap).
+  //   4. Short delay before firing so the pair button is wired up.
+  // If any check fails, we silently no-op — the user can manually
+  // re-click "连接" if they want to.
+  if (bootAutoReconnect && role === "GM" && lastPairCode && !peerConn) {
+    // Show "连接中…" RIGHT AWAY so the expanded popover never flashes
+    // "未连接" during the reconnect handshake (the reported bug).
+    pairCodeEl.value = lastPairCode;
+    setPairStatus(T("mbStConnecting"), "connecting");
+    setTimeout(() => {
+      // Re-check inside the timeout — user may have manually clicked
+      // disconnect during the delay window (unlikely with 250ms but
+      // defensive). pairBtn click handler also stops if peerConn is
+      // already set.
+      if (peerConn) return;
+      if (!lastPairCode) return;
+      try {
+        pairCodeEl.value = lastPairCode;
+        pairBtn.click();
+      } catch (e) {
+        console.warn("[music-board] auto-reconnect failed", e);
+      }
+    }, 250);
+  }
 });

@@ -1,4 +1,5 @@
 import OBR from "@owlbear-rodeo/sdk";
+import { getLocalLang } from "../state";
 import { assetUrl } from "../asset-base";
 
 // "Time Stop" / 时停模式 module — migrated from time-stop plugin.
@@ -19,6 +20,14 @@ const BROADCAST_ON = `${PLUGIN_ID}/on`;
 const BROADCAST_OFF = `${PLUGIN_ID}/off`;
 const BC_TOGGLE = "com.obr-suite/timestop-toggle";
 const BC_STATE = "com.obr-suite/timestop-state";
+// LOCAL broadcast → background ensures the cluster-row popover is open
+// (idempotent, in-sync). Fired by the GM on turn-on so the 时停 off-
+// switch stays reachable behind the fullscreen overlay — especially
+// for the CG path, which is triggered from a right-click menu while
+// the row may be closed. Routing through background's openClusterRow
+// keeps clusterRowIsOpen + the trigger glow synced (the user warned
+// against bypassing the trigger and desyncing the toggle state).
+const BC_CLUSTER_ROW_OPEN = "com.obr-suite/cluster-row-open";
 
 const MENU_ID = `${PLUGIN_ID}/toggle`;
 // 2026-05-14 (#7) — "显示为 CG" right-click menu on MAP items.
@@ -188,6 +197,16 @@ async function turnOn(cgUrl: string | null = null) {
   // un-movable by the GM during this time stop.
   await unlockOldLockedItems();
   notifyClusterState(true);
+  // DM only: pop the cluster-row open so the 时停 off-switch is right
+  // there behind the overlay. Idempotent via background's
+  // clusterRowIsOpen guard; LOCAL so it only affects the DM that
+  // triggered it. (Players don't get the row — they can't close time
+  // stop anyway.)
+  if (isGM) {
+    try {
+      OBR.broadcast.sendMessage(BC_CLUSTER_ROW_OPEN, {}, { destination: "LOCAL" });
+    } catch {}
+  }
 }
 
 /** Programmatic entry point for other modules (e.g. trickster) to
@@ -217,6 +236,7 @@ async function toggle() {
 
 export async function setupTimeStop(): Promise<void> {
   isGM = (await OBR.player.getRole()) === "GM";
+  const en = getLocalLang() === "en";
 
   // The 开启/关闭时停 right-click menu was removed earlier — the
   // cluster's 时停 button is the toggle entry point.
@@ -234,7 +254,7 @@ export async function setupTimeStop(): Promise<void> {
         icons: [
           {
             icon: ICON_URL,
-            label: "显示为 CG",
+            label: en ? "Show as CG" : "显示为 CG",
             filter: {
               roles: ["GM"],
               every: [

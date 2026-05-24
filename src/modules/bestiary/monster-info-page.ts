@@ -48,7 +48,9 @@ function toggleMonsterInfoPinned(): void {
   if (btn) {
     btn.classList.toggle("pinned", next);
     btn.setAttribute("aria-pressed", String(next));
-    btn.title = next ? "已置顶（取消则恢复随选择关闭）" : "置顶面板（取消选中也保持显示）";
+    btn.title = next
+      ? (_curLang === "en" ? "Pinned (unpin to close on deselect again)" : "已置顶（取消则恢复随选择关闭）")
+      : (_curLang === "en" ? "Pin panel (stays open after deselect)" : "置顶面板（取消选中也保持显示）");
   }
 }
 
@@ -200,7 +202,9 @@ function renderNameButton(name: string, clickable: boolean): string {
   if (!clickable) {
     return `<div class="name">${escapeHtml(name)}</div>`;
   }
-  const title = `点击 → 同步 / 清除 token 名字：${name}`;
+  const title = _curLang === "en"
+    ? `Click → set / clear token name: ${name}`
+    : `点击 → 同步 / 清除 token 名字：${name}`;
   return `<button class="name name-btn" type="button" data-name-text="${escapeHtml(name)}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${escapeHtml(name)}</button>`;
 }
 
@@ -308,15 +312,17 @@ function hpToNumber(hp: any): number | null {
 // each as its own line so a monster with walk/fly/swim shows three lines.
 function parseSpeedParts(speed: any): string[] {
   if (!speed) return ["?"];
-  if (typeof speed === "number") return [`${speed}尺`];
+  const en = _curLang === "en";
+  const unit = en ? " ft." : "尺";
+  if (typeof speed === "number") return [`${speed}${unit}`];
   if (typeof speed !== "object") return ["?"];
   const v = (x: any) => typeof x === "number" ? x : (x?.number ?? "?");
   const parts: string[] = [];
-  if (speed.walk != null) parts.push(`${v(speed.walk)}尺`);
-  if (speed.fly != null) parts.push(`飞${v(speed.fly)}`);
-  if (speed.swim != null) parts.push(`泳${v(speed.swim)}`);
-  if (speed.climb != null) parts.push(`攀${v(speed.climb)}`);
-  if (speed.burrow != null) parts.push(`掘${v(speed.burrow)}`);
+  if (speed.walk != null) parts.push(`${v(speed.walk)}${unit}`);
+  if (speed.fly != null) parts.push(en ? `fly ${v(speed.fly)}` : `飞${v(speed.fly)}`);
+  if (speed.swim != null) parts.push(en ? `swim ${v(speed.swim)}` : `泳${v(speed.swim)}`);
+  if (speed.climb != null) parts.push(en ? `climb ${v(speed.climb)}` : `攀${v(speed.climb)}`);
+  if (speed.burrow != null) parts.push(en ? `burrow ${v(speed.burrow)}` : `掘${v(speed.burrow)}`);
   return parts.length ? parts : ["?"];
 }
 
@@ -425,7 +431,9 @@ function parseSizeStr(size: any): string {
   if (!size) return "?";
   const arr = Array.isArray(size) ? size : [size];
   const code = String(arr[0] || "").toUpperCase();
-  const map: Record<string, string> = { T: "超小", S: "小", M: "中", L: "大", H: "巨", G: "超巨" };
+  const map: Record<string, string> = _curLang === "en"
+    ? { T: "Tiny", S: "Small", M: "Medium", L: "Large", H: "Huge", G: "Gargantuan" }
+    : { T: "超小", S: "小", M: "中", L: "大", H: "巨", G: "超巨" };
   return map[code] || code || "?";
 }
 
@@ -449,22 +457,24 @@ function renderSpellList(arr: any): string {
   // whole formatted result in the chip so the chip fires search and
   // any nested .rollable inside fires its own roll first (closest()
   // resolves to the most-specific match).
+  const searchTip = _curLang === "en" ? "Search: " : "点击搜索: ";
   return arr.map((s) => {
     const display = formatTagsClickable(String(s));
     const cleanName = stripHtmlTags(display);
     if (!cleanName) return "";
-    return `<span class="spell-chip" data-q="${escapeHtml(cleanName)}" title="点击搜索: ${escapeHtml(cleanName)}">${display}</span>`;
-  }).filter(Boolean).join("、");
+    return `<span class="spell-chip" data-q="${escapeHtml(cleanName)}" title="${escapeHtml(searchTip)}${escapeHtml(cleanName)}">${display}</span>`;
+  }).filter(Boolean).join(_curLang === "en" ? ", " : "、");
 }
 
 function renderSpellLevels(spells: any): string {
   if (!spells || typeof spells !== "object") return "";
+  const en = _curLang === "en";
   const levels = Object.keys(spells).sort((a, b) => Number(a) - Number(b));
   return levels.map((lv) => {
     const slot = spells[lv];
     if (!slot) return "";
-    const label = lv === "0" ? "戏法" : `${lv}环`;
-    const slotInfo = typeof slot.slots === "number" ? ` (${slot.slots}次)` : "";
+    const label = lv === "0" ? (en ? "Cantrips" : "戏法") : (en ? `Level ${lv}` : `${lv}环`);
+    const slotInfo = typeof slot.slots === "number" ? (en ? ` (${slot.slots} slots)` : ` (${slot.slots}次)`) : "";
     const sp = renderSpellList(slot.spells);
     if (!sp) return "";
     return `<div class="spell-line"><span class="sl">${label}${slotInfo}</span>${sp}</div>`;
@@ -473,8 +483,11 @@ function renderSpellLevels(spells: any): string {
 
 function renderSpellDaily(daily: any): string {
   if (!daily || typeof daily !== "object") return "";
+  const en = _curLang === "en";
   return Object.entries(daily).map(([k, v]) => {
-    const label = k.endsWith("e") ? `${k.slice(0, -1)}次/日（每个）` : `${k}次/日`;
+    const label = k.endsWith("e")
+      ? (en ? `${k.slice(0, -1)}/day (each)` : `${k.slice(0, -1)}次/日（每个）`)
+      : (en ? `${k}/day` : `${k}次/日`);
     const sp = renderSpellList(v);
     if (!sp) return "";
     return `<div class="spell-line"><span class="sl">${label}</span>${sp}</div>`;
@@ -535,16 +548,29 @@ let INFO_MAX_HEIGHT = 340;
 // Role state — used to suppress DM-only affordances when the popover is
 // open for a player (allowPlayerMonsters in suite settings).
 let isGMRole = false;
+// Ownership of the currently-shown token. TRUE when the viewing player
+// CREATED (owns) this token — i.e. a familiar / polymorph form the GM
+// handed them. Such a token can carry BOTH a character card AND
+// bestiary data; when that happens the editable cc-info banner and the
+// monster-info banner BOTH open on selection. Before this flag,
+// monster-info forced every stat input read-only for any non-GM, so an
+// owner reaching for the prominent monster-info HP pill hit "玩家端只读"
+// and concluded HP editing was broken. Owners now edit here too —
+// both banners write the same com.obr-suite/bubbles/data key, so they
+// stay in sync. A player viewing a GM NPC (via allowPlayerMonsters)
+// still has isOwner=false → read-only, which is correct.
+let isOwner = false;
+let myPlayerId: string | null = null;
 function applyRoleGating() {
-  // Stat inputs become read-only for non-GM. The lock button is
-  // hidden via CSS based on the body class.
+  // Editable for the GM OR the token's owner; read-only for everyone
+  // else. The lock button stays GM-only (toggles whole-room
+  // visibility — not an owner concern).
+  const canEdit = isGMRole || isOwner;
   document.body.classList.toggle("is-gm", isGMRole);
   document.body.classList.toggle("is-player", !isGMRole);
   root.querySelectorAll<HTMLInputElement>(".stat-input").forEach((el) => {
-    el.readOnly = !isGMRole;
-    if (!isGMRole) {
-      el.title = "玩家端只读";
-    }
+    el.readOnly = !canEdit;
+    el.title = canEdit ? "" : (_curLang === "en" ? "Read-only for players" : "玩家端只读");
   });
   root.querySelectorAll<HTMLButtonElement>(".stat-lock").forEach((el) => {
     el.style.display = isGMRole ? "" : "none";
@@ -569,6 +595,8 @@ function render(m: any) {
   // mid-render via a broadcast (would otherwise produce mixed-lang
   // output for the same monster).
   const en = _curLang === "en";
+  // Stat-input syntax-help tooltip (set / +delta / -delta / set+delta).
+  const statTip = en ? "Supports 20 / +5 / -3 / 15+5" : "支持 20 / +5 / -3 / 15+5";
   const name = m.name || "???";
   const eng = m.ENG_name || "";
   const cr = m.cr?.cr ?? m.cr ?? "?";
@@ -620,27 +648,27 @@ function render(m: any) {
           <span class="prev-hint" data-prev></span>
           <input class="stat-input" type="text" inputmode="numeric"
                  data-field="health" value="${escapeHtml(String(liveHp ?? ""))}"
-                 title="支持 20 / +5 / -3 / 15+5">
+                 title="${statTip}">
         </span>
         <span class="slash">/</span>
         <span class="stat-cell">
           <span class="prev-hint" data-prev></span>
           <input class="stat-input" type="text" inputmode="numeric"
                  data-field="max health" value="${escapeHtml(String(liveMaxHp ?? ""))}"
-                 title="支持 20 / +5 / -3 / 15+5">
+                 title="${statTip}">
         </span>
       </div>
       <div class="temp-pill stat-cell">
         <span class="prev-hint" data-prev></span>
         <input class="stat-input" type="text" inputmode="numeric"
                data-field="temporary health" value="${escapeHtml(String(liveTempHp))}"
-               title="支持 20 / +5 / -3 / 15+5">
+               title="${statTip}">
       </div>
       <div class="ac-pill stat-cell">
         <span class="prev-hint" data-prev></span>
         <input class="stat-input" type="text" inputmode="numeric"
                data-field="armor class" value="${escapeHtml(String(liveAc))}"
-               title="支持 20 / +5 / -3 / 15+5">
+               title="${statTip}">
       </div>
       ${renderLockButton(liveBubbles.locked !== false)}
     </div>
@@ -649,7 +677,7 @@ function render(m: any) {
   // Compact CR / speed chips (HP & AC moved into stat-rows above).
   const chips = `
     <div class="chip cr"><span class="k">CR</span><span class="v">${escapeHtml(cr)}</span></div>
-    <div class="chip speed"><span class="k">速度</span><span class="v">${speedLines}</span></div>
+    <div class="chip speed"><span class="k">${en ? "Speed" : "速度"}</span><span class="v">${speedLines}</span></div>
   `;
 
   // Meta block — skills, senses, languages, damage resistances /
@@ -805,13 +833,13 @@ function render(m: any) {
   root.innerHTML = `
     <div class="hdr">
       <button class="reset-btn" id="bubbles-reset-btn" type="button"
-        title="重置画面血条 — 清缓存重画，修复偶发的位置漂移">
+        title="${en ? "Reset on-screen HP bar — clear cache + redraw, fixes occasional drift" : "重置画面血条 — 清缓存重画，修复偶发的位置漂移"}">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 8 a5 5 0 1 0 1.5 -3.5"/>
           <path d="M3.2 3 V5.5 H5.5"/>
         </svg>
       </button>
-      <div class="drag-handle" id="drag-handle" title="拖动 / Drag" aria-label="拖动面板">
+      <div class="drag-handle" id="drag-handle" title="${en ? "Drag" : "拖动 / Drag"}" aria-label="${en ? "Drag panel" : "拖动面板"}">
         <svg viewBox="0 0 12 18" aria-hidden="true">
           <circle cx="3" cy="3" r="1.2" fill="currentColor"/>
           <circle cx="9" cy="3" r="1.2" fill="currentColor"/>
@@ -823,7 +851,7 @@ function render(m: any) {
       </div>
       <button class="panel-pin-btn ${pinned ? "pinned" : ""}" id="panel-pin-btn" type="button"
         aria-pressed="${pinned}"
-        title="${pinned ? "已置顶（取消则恢复随选择关闭）" : "置顶面板（取消选中也保持显示）"}">
+        title="${pinned ? (en ? "Pinned (unpin to close on deselect again)" : "已置顶（取消则恢复随选择关闭）") : (en ? "Pin panel (stays open after deselect)" : "置顶面板（取消选中也保持显示）")}">
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.339-.016-.484-.041L7.176 13.04a.5.5 0 0 1-.708 0L3.633 10.207 1.4 12.439a.5.5 0 0 1-.707-.707L2.926 9.5.74 7.314a.5.5 0 0 1 0-.708l1.51-1.51c.41-.41.945-.625 1.482-.711.534-.085 1.139-.097 1.683-.024.546.073 1.169.114 1.643-.04.305-.099.62-.281.94-.602.193-.193.282-.467.348-.749.066-.281.117-.572.196-.793a1.51 1.51 0 0 1 .31-.508c.094-.092.215-.174.357-.232a.5.5 0 0 1 .19-.04Z" fill="currentColor"/>
         </svg>
@@ -904,11 +932,12 @@ type RtTabId = "attr" | "res";
 let activeRtTab: RtTabId = "attr";
 
 function renderTabStrip(): string {
+  const en = _curLang === "en";
   return `
     <div class="rt-tabstrip">
       <div class="rt-tab-indicator" data-rt-indicator></div>
-      <button class="rt-tab ${activeRtTab === "attr" ? "on" : ""}" data-rt-tab="attr" type="button">属性</button>
-      <button class="rt-tab ${activeRtTab === "res" ? "on" : ""}" data-rt-tab="res" type="button">资源</button>
+      <button class="rt-tab ${activeRtTab === "attr" ? "on" : ""}" data-rt-tab="attr" type="button">${en ? "Stats" : "属性"}</button>
+      <button class="rt-tab ${activeRtTab === "res" ? "on" : ""}" data-rt-tab="res" type="button">${en ? "Resources" : "资源"}</button>
     </div>
   `;
 }
@@ -981,13 +1010,17 @@ async function ensureResourceMount(): Promise<void> {
 // always render the button when the popover is open. Closed padlock
 // = locked (default — players see no bar in idle, silhouette in
 // combat); open padlock = unlocked (everyone sees full HP / AC).
+function lockTitle(locked: boolean): string {
+  const en = _curLang === "en";
+  return locked
+    ? (en ? "Locked: in combat prep / combat players see only the HP-bar ratio (no numbers / AC)" : "已上锁：玩家在战斗准备 / 战斗中只看到血条比例（无数值 / AC）")
+    : (en ? "Unlocked: all players see full HP / AC values" : "已解锁：所有玩家可见完整 HP / AC 数值");
+}
 function renderLockButton(locked: boolean): string {
-  const titleZh = locked
-    ? "已上锁：玩家在战斗准备 / 战斗中只看到血条比例（无数值 / AC）"
-    : "已解锁：所有玩家可见完整 HP / AC 数值";
+  const title = lockTitle(locked);
   const lockedAttr = locked ? "true" : "false";
   return `
-    <button class="stat-lock" data-locked="${lockedAttr}" title="${escapeHtml(titleZh)}" aria-label="${escapeHtml(titleZh)}" type="button">
+    <button class="stat-lock" data-locked="${lockedAttr}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" type="button">
       <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" stroke="none"/>
         <path class="lock-shackle" d="M5 7 V5 a3 3 0 0 1 6 0 V7"/>
@@ -1035,9 +1068,7 @@ function refreshStatInputs(live: BubblesData, skipFocused = true): void {
   if (lockBtn) {
     const locked = live.locked === undefined ? true : !!live.locked;
     lockBtn.dataset.locked = locked ? "true" : "false";
-    lockBtn.title = locked
-      ? "已上锁：玩家在战斗准备 / 战斗中只看到血条比例（无数值 / AC）"
-      : "已解锁：所有玩家可见完整 HP / AC 数值";
+    lockBtn.title = lockTitle(locked);
   }
 }
 
@@ -1067,9 +1098,7 @@ function bindStatRowInputs(): void {
       const wasLocked = lockBtn.dataset.locked !== "false";
       const next = !wasLocked;
       lockBtn.dataset.locked = next ? "true" : "false";
-      lockBtn.title = next
-        ? "已上锁：玩家在战斗准备 / 战斗中只看到血条比例（无数值 / AC）"
-        : "已解锁：所有玩家可见完整 HP / AC 数值";
+      lockBtn.title = lockTitle(next);
       try {
         await patchBubbles(
           currentItemId!,
@@ -1152,21 +1181,37 @@ function bindStatRowInputs(): void {
 async function showMonster(slug: string, itemId: string | null = currentItemId) {
   currentSlug = slug;
   currentItemId = itemId;
+  // Resolve ownership of the bound token in parallel with everything
+  // else: a player who CREATED this token owns it and may edit its HP.
+  // Mirror bestiary/index.ts's check: item.createdUserId === myId.
+  const ownP: Promise<boolean> = itemId
+    ? OBR.scene.items
+        .getItems([itemId])
+        .then((arr) => {
+          const it = arr[0] as any;
+          return !!(it && myPlayerId && it.createdUserId === myPlayerId);
+        })
+        .catch(() => false)
+    : Promise.resolve(false);
   // Load the bound token's bubbles snapshot in parallel with monster
   // data — render() reads liveBubbles for the editable HP/AC rows.
   const liveP = itemId ? readBubbles(itemId) : Promise.resolve({} as BubblesData);
   try {
-    const [meta, live] = await Promise.all([
+    const [meta, live, owns] = await Promise.all([
       OBR.scene.getMetadata(),
       liveP,
+      ownP,
     ]);
     liveBubbles = live;
+    // Update ownership BEFORE render() → its trailing applyRoleGating()
+    // (called inside render) picks up the correct editable state.
+    isOwner = owns;
     const table = (meta[BESTIARY_DATA_KEY] as Record<string, any>) || {};
     let m = table[slug];
     if (!m) m = await fetchMonsterBySlug(slug);
     if (currentSlug !== slug) return;
     if (!m) {
-      root.innerHTML = `<div class="err">未找到怪物数据</div>`;
+      root.innerHTML = `<div class="err">${_curLang === "en" ? "Monster data not found" : "未找到怪物数据"}</div>`;
       await adjustHeight();
       return;
     }
@@ -1174,7 +1219,7 @@ async function showMonster(slug: string, itemId: string | null = currentItemId) 
     await adjustHeight();
   } catch (e: any) {
     if (currentSlug !== slug) return;
-    root.innerHTML = `<div class="err">加载失败：${escapeHtml(e?.message ?? e)}</div>`;
+    root.innerHTML = `<div class="err">${_curLang === "en" ? "Load failed: " : "加载失败："}${escapeHtml(e?.message ?? e)}</div>`;
     await adjustHeight();
   }
 }
@@ -1277,6 +1322,7 @@ OBR.onReady(async () => {
   // applyRoleGating() fires once at startup and again on player
   // change so a role flip during the session reflects immediately.
   try { isGMRole = (await OBR.player.getRole()) === "GM"; } catch {}
+  try { myPlayerId = await OBR.player.getId(); } catch {}
   applyRoleGating();
   OBR.player.onChange((p) => {
     const next = p.role === "GM";

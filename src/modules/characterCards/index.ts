@@ -1,4 +1,5 @@
 import OBR from "@owlbear-rodeo/sdk";
+import { getLocalLang } from "../../state";
 import { assetUrl } from "../../asset-base";
 import { onViewportResize } from "../../utils/viewportAnchor";
 import {
@@ -108,6 +109,10 @@ const INFO_HEIGHT = 260;
 const INFO_GAP = 8;
 
 const unsubs: Array<() => void> = [];
+// 2026-05-21 (audit) — module-scope so teardown can cancel it; a
+// pending debounce could otherwise fire post-teardown and reopen a
+// ghost cc-info popover.
+let selectionDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let infoPopoverOpen = false;
 let currentInfoCard: string | null = null;
 // Last itemId passed to openInfoPopoverFor — needed so the viewport-
@@ -448,6 +453,7 @@ async function propagateCardRefresh(cardId: string): Promise<void> {
 }
 
 export async function setupCharacterCards(): Promise<void> {
+  const en = getLocalLang() === "en";
   try {
     const p = await OBR.player.getRole();
     ccRole = (p as "GM" | "PLAYER") || "PLAYER";
@@ -474,7 +480,7 @@ export async function setupCharacterCards(): Promise<void> {
       icons: [
         {
           icon: ICON_URL,
-          label: "角色卡界面",
+          label: en ? "Character sheet" : "角色卡界面",
         },
       ],
       onClick: async () => {
@@ -512,7 +518,7 @@ export async function setupCharacterCards(): Promise<void> {
     icons: [
       {
         icon: ICON_URL,
-        label: "绑定角色卡",
+        label: en ? "Bind character card" : "绑定角色卡",
         filter: {
           roles: ["GM"],
           every: [
@@ -592,13 +598,12 @@ export async function setupCharacterCards(): Promise<void> {
   // 30 ms collapses them so handleSelection only sees the final
   // committed state. Prevents the resource-panel flicker on every
   // resource-tracker click.
-  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   unsubs.push(
     OBR.scene.items.onChange(() => {
       if (!currentInfoCard) return;
-      if (pendingTimer) clearTimeout(pendingTimer);
-      pendingTimer = setTimeout(async () => {
-        pendingTimer = null;
+      if (selectionDebounceTimer) clearTimeout(selectionDebounceTimer);
+      selectionDebounceTimer = setTimeout(async () => {
+        selectionDebounceTimer = null;
         try {
           const sel = await OBR.player.getSelection();
           await handleSelection(sel);
@@ -637,6 +642,7 @@ export async function setupCharacterCards(): Promise<void> {
 }
 
 export async function teardownCharacterCards(): Promise<void> {
+  if (selectionDebounceTimer) { clearTimeout(selectionDebounceTimer); selectionDebounceTimer = null; }
   await closeMainPopover();
   await closeInfoPopover();
   try { await OBR.contextMenu.remove(CTX_BIND); } catch {}

@@ -1001,6 +1001,13 @@ export async function teardownStatusTracker(): Promise<void> {
   try { await OBR.tool.removeMode(`${TOOL_ID}/mode`); } catch {}
   try { await OBR.tool.remove(TOOL_ID); } catch {}
   await removeCreateStatusMenu();
-  await deactivate();
+  // Force-close every popover/modal UNCONDITIONALLY. We can't rely on
+  // deactivate() here — it early-returns when the status tool isn't the
+  // active tool (e.g. user switched to Select, then disabled the module
+  // in Settings), which would leave the capture / manage modal open.
+  active = false;
+  try { await closeCapture(); } catch {}
+  try { await closeManagePopover(); } catch {}
+  try { await closePalette(); } catch {}
   await sweepAllOurItems();
 }

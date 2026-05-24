@@ -116,6 +116,7 @@ export default defineConfig(({ command }) => ({
         "portal-blink": resolve(__dirname, "portal-blink.html"),
         "trickster-edit": resolve(__dirname, "trickster-edit.html"),
         "circleimage": resolve(__dirname, "circleimage.html"),
+        "transform": resolve(__dirname, "transform.html"),
         "resource-edit": resolve(__dirname, "resource-edit.html"),
         "resource-toast": resolve(__dirname, "resource-toast.html"),
         "resource-tracker": resolve(__dirname, "resource-tracker.html"),

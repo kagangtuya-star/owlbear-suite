@@ -13,8 +13,12 @@ import {
 } from "../../utils/panelLayout";
 import { BC_LOCAL_CONTENT_CHANGED } from "../../utils/localContent";
 import { clearMonsterCache, loadAllMonsters, getRawMonster } from "./data";
-import { onStateChange, getState } from "../../state";
+import { onStateChange, getState, getLocalLang } from "../../state";
 import { createCanvasDragMode } from "../../utils/canvasDragMode";
+
+// Per-client language for context-menu / tool labels, read once at
+// module load (matches when context menus are registered).
+const en = getLocalLang() === "en";
 
 // Bestiary list panel bbox — RIGHT/TOP anchor. Always returns the
 // expected bbox even when the panel isn't open (layout editor uses
@@ -184,6 +188,12 @@ const INFO_TOP_OFFSET = 60;
 const INFO_RIGHT_OFFSET = 60;
 
 const unsubs: Array<() => void> = [];
+// 2026-05-21 (audit) — module-scope handles so teardownBestiary can
+// fully reverse setup: clear the selection-debounce timer and close
+// the in-flight drag modal (otherwise its 35s safety timer could fire
+// post-teardown and close a freshly-reopened module's drag modal).
+let selectionDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let closeDragModalFn: (() => void) | null = null;
 let isOpen = false;
 let infoPopoverOpen = false;
 let currentInfoSlug: string | null = null;
@@ -422,7 +432,7 @@ export async function setupBestiary(): Promise<void> {
     icons: [
       {
         icon: ICON_URL,
-        label: "怪物图鉴",
+        label: en ? "Bestiary" : "怪物图鉴",
         filter: { roles: ["GM"] },
       },
     ],
@@ -451,7 +461,7 @@ export async function setupBestiary(): Promise<void> {
     modeId: `${TOOL_ID}/mode`,
     toolId: TOOL_ID,
     icon: ICON_URL,
-    label: "浏览",
+    label: en ? "Browse" : "浏览",
   });
 
   // Track previous tool + open/close panel based on which tool is active.
@@ -501,7 +511,7 @@ export async function setupBestiary(): Promise<void> {
         icons: [
           {
             icon: ICON_URL,
-            label: "切换怪物图鉴",
+            label: en ? "Toggle bestiary" : "切换怪物图鉴",
             filter: { activeTools: [SELECT_TOOL, TOOL_ID] },
           },
         ],
@@ -610,12 +620,11 @@ export async function setupBestiary(): Promise<void> {
   // empty-read guards inside handleSelection are kept as defence-in-
   // depth (the resource panel's own items.onChange listener is left
   // un-debounced because its refresh() does incremental DOM diff).
-  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   unsubs.push(
     OBR.scene.items.onChange(() => {
-      if (pendingTimer) clearTimeout(pendingTimer);
-      pendingTimer = setTimeout(async () => {
-        pendingTimer = null;
+      if (selectionDebounceTimer) clearTimeout(selectionDebounceTimer);
+      selectionDebounceTimer = setTimeout(async () => {
+        selectionDebounceTimer = null;
         try {
           const sel = await OBR.player.getSelection();
           await handleSelection(sel);
@@ -692,7 +701,7 @@ export async function setupBestiary(): Promise<void> {
       icons: [
         {
           icon: ICON_URL,
-          label: "绑定怪物图鉴",
+          label: en ? "Bind to bestiary" : "绑定怪物图鉴",
           filter: {
             roles: ["GM"],
             every: [
@@ -714,7 +723,7 @@ export async function setupBestiary(): Promise<void> {
       icons: [
         {
           icon: ICON_URL,
-          label: "更换怪物图鉴",
+          label: en ? "Change bestiary entry" : "更换怪物图鉴",
           filter: {
             roles: ["GM"],
             every: [
@@ -736,7 +745,7 @@ export async function setupBestiary(): Promise<void> {
       icons: [
         {
           icon: ICON_URL,
-          label: "移除怪物图鉴绑定",
+          label: en ? "Remove bestiary binding" : "移除怪物图鉴绑定",
           filter: {
             roles: ["GM"],
             every: [
@@ -774,7 +783,7 @@ export async function setupBestiary(): Promise<void> {
       icons: [
         {
           icon: ICON_URL,
-          label: "群体绑定怪物图鉴",
+          label: en ? "Bulk bind to bestiary" : "群体绑定怪物图鉴",
           filter: {
             roles: ["GM"],
             // ALL selected tokens must be IMAGE; metadata state can
@@ -799,7 +808,7 @@ export async function setupBestiary(): Promise<void> {
       icons: [
         {
           icon: ICON_URL,
-          label: "群体移除怪物图鉴",
+          label: en ? "Bulk remove bestiary binding" : "群体移除怪物图鉴",
           filter: {
             roles: ["GM"],
             // Show only when at least one CHARACTER-layer token in the
@@ -886,6 +895,9 @@ export async function setupBestiary(): Promise<void> {
     dragModalOpen = false;
     try { await OBR.modal.close(MONSTER_DRAG_MODAL_ID); } catch {}
   };
+  // Expose for teardown so an in-flight drag modal + its 35s safety
+  // timer are torn down with the module.
+  closeDragModalFn = () => { void closeDragModal(); };
   unsubs.push(
     OBR.broadcast.onMessage(BC_MONSTER_DRAG_START, async (event) => {
       const payload = event.data as Record<string, unknown> | undefined;
@@ -922,6 +934,11 @@ export async function setupBestiary(): Promise<void> {
 }
 
 export async function teardownBestiary(): Promise<void> {
+  // Cancel the selection debounce + close any in-flight drag modal
+  // (and its 35s safety timer) before detaching listeners, so neither
+  // can fire after teardown.
+  if (selectionDebounceTimer) { clearTimeout(selectionDebounceTimer); selectionDebounceTimer = null; }
+  if (closeDragModalFn) { try { closeDragModalFn(); } catch {} closeDragModalFn = null; }
   await teardownGroupSaves();
   await closePanel();
   await closeInfoPopover();

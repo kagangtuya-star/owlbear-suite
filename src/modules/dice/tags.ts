@@ -170,7 +170,7 @@ function parseTagPayload(tag: string, payload: string):
         kind: "roll",
         spec: {
           expression: expr,
-          label: "命中",
+          label: getLocalLang() === "en" ? "Hit" : "命中",
           display: bonus >= 0 ? `+${bonus}` : `${bonus}`,
         },
       };

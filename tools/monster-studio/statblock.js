@@ -10,17 +10,35 @@
 // Input: a single 5etools-shape monster object (the suite's custom
 // monster format). Output: an HTML string for the preview pane.
 
+import { LANG, t } from "./i18n.js";
+
 const ORDER = ["str", "dex", "con", "int", "wis", "cha"];
-const ABBR = { str: "力量", dex: "敏捷", con: "体质", int: "智力", wis: "感知", cha: "魅力" };
-const SIZE_CN = { T: "微型", S: "小型", M: "中型", L: "大型", H: "巨型", G: "超巨型" };
-const SKILL_CN = {
-  acrobatics: "特技", "animal handling": "驯兽", arcana: "奥秘",
-  athletics: "运动", deception: "欺瞒", history: "历史",
-  insight: "洞悉", intimidation: "威吓", investigation: "调查",
-  medicine: "医药", nature: "自然", perception: "察觉",
-  performance: "表演", persuasion: "游说", religion: "宗教",
-  "sleight of hand": "巧手", stealth: "隐匿", survival: "求生",
-};
+const ABBR = ({
+  zh: { str: "力量", dex: "敏捷", con: "体质", int: "智力", wis: "感知", cha: "魅力" },
+  en: { str: "STR", dex: "DEX", con: "CON", int: "INT", wis: "WIS", cha: "CHA" },
+})[LANG];
+const SIZE_CN = ({
+  zh: { T: "微型", S: "小型", M: "中型", L: "大型", H: "巨型", G: "超巨型" },
+  en: { T: "Tiny", S: "Small", M: "Medium", L: "Large", H: "Huge", G: "Gargantuan" },
+})[LANG];
+const SKILL_CN = ({
+  zh: {
+    acrobatics: "特技", "animal handling": "驯兽", arcana: "奥秘",
+    athletics: "运动", deception: "欺瞒", history: "历史",
+    insight: "洞悉", intimidation: "威吓", investigation: "调查",
+    medicine: "医药", nature: "自然", perception: "察觉",
+    performance: "表演", persuasion: "游说", religion: "宗教",
+    "sleight of hand": "巧手", stealth: "隐匿", survival: "求生",
+  },
+  en: {
+    acrobatics: "Acrobatics", "animal handling": "Animal Handling", arcana: "Arcana",
+    athletics: "Athletics", deception: "Deception", history: "History",
+    insight: "Insight", intimidation: "Intimidation", investigation: "Investigation",
+    medicine: "Medicine", nature: "Nature", perception: "Perception",
+    performance: "Performance", persuasion: "Persuasion", religion: "Religion",
+    "sleight of hand": "Sleight of Hand", stealth: "Stealth", survival: "Survival",
+  },
+})[LANG];
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
@@ -91,16 +109,17 @@ function parseHp(hp) {
 
 function parseSpeed(speed) {
   if (speed == null) return "?";
-  if (typeof speed === "number") return `${speed} 尺`;
+  const ft = t("sbFt");
+  if (typeof speed === "number") return `${speed} ${ft}`;
   if (typeof speed !== "object") return "?";
   const v = (x) => (typeof x === "number" ? x : x && typeof x === "object" ? x.number ?? "?" : "?");
   const parts = [];
-  if (speed.walk != null) parts.push(`${v(speed.walk)} 尺`);
-  if (speed.fly != null) parts.push(`飞行 ${v(speed.fly)}`);
-  if (speed.swim != null) parts.push(`游泳 ${v(speed.swim)}`);
-  if (speed.climb != null) parts.push(`攀爬 ${v(speed.climb)}`);
-  if (speed.burrow != null) parts.push(`挖掘 ${v(speed.burrow)}`);
-  return parts.length ? parts.join("、") : "?";
+  if (speed.walk != null) parts.push(`${v(speed.walk)} ${ft}`);
+  if (speed.fly != null) parts.push(`${t("sbFly")} ${v(speed.fly)}`);
+  if (speed.swim != null) parts.push(`${t("sbSwim")} ${v(speed.swim)}`);
+  if (speed.climb != null) parts.push(`${t("sbClimb")} ${v(speed.climb)}`);
+  if (speed.burrow != null) parts.push(`${t("sbBurrow")} ${v(speed.burrow)}`);
+  return parts.length ? parts.join(LANG === "en" ? ", " : "、") : "?";
 }
 
 function parseSizeStr(size) {
@@ -164,26 +183,28 @@ function sectionHtml(items, cls, title) {
 
 function renderSpellcasting(scArr) {
   if (!Array.isArray(scArr) || scArr.length === 0) return "";
-  let out = `<div class="sb-sect">✦ 施法</div>`;
+  const sep = LANG === "en" ? ", " : "、";
+  const colon = LANG === "en" ? ": " : "：";
+  let out = `<div class="sb-sect">✦ ${t("sbSpellcasting")}</div>`;
   for (const sc of scArr) {
     const header = flattenEntries(sc.headerEntries);
-    out += `<div class="sb-act"><span class="sb-act-n">${renderTags(sc.name || "施法")}</span>` +
+    out += `<div class="sb-act"><span class="sb-act-n">${renderTags(sc.name || t("sbSpellcasting"))}</span>` +
       (header ? `<span class="sb-act-t">${renderTags(header)}</span>` : "") + `</div>`;
     if (sc.will && sc.will.length) {
-      out += `<div class="sb-spell-line"><b>随意：</b>${renderTags(sc.will.join("、"))}</div>`;
+      out += `<div class="sb-spell-line"><b>${t("sbAtWill")}${colon}</b>${renderTags(sc.will.join(sep))}</div>`;
     }
     if (sc.daily && typeof sc.daily === "object") {
       for (const [k, v] of Object.entries(sc.daily)) {
-        if (Array.isArray(v)) out += `<div class="sb-spell-line"><b>${esc(k)}/日：</b>${renderTags(v.join("、"))}</div>`;
+        if (Array.isArray(v)) out += `<div class="sb-spell-line"><b>${esc(t("sbPerDay", { k }))}${colon}</b>${renderTags(v.join(sep))}</div>`;
       }
     }
     if (sc.spells && typeof sc.spells === "object") {
       for (const [lvl, slot] of Object.entries(sc.spells)) {
         const list = slot && Array.isArray(slot.spells) ? slot.spells : [];
         if (!list.length) continue;
-        const lvlLabel = lvl === "0" ? "戏法" : `${lvl} 环`;
-        const slots = slot && slot.slots ? `（${slot.slots} 个法术位）` : "";
-        out += `<div class="sb-spell-line"><b>${esc(lvlLabel)}${slots}：</b>${renderTags(list.join("、"))}</div>`;
+        const lvlLabel = lvl === "0" ? t("sbCantrip") : t("sbRing", { lvl });
+        const slots = slot && slot.slots ? t("sbSlots", { n: slot.slots }) : "";
+        out += `<div class="sb-spell-line"><b>${esc(lvlLabel)}${slots}${colon}</b>${renderTags(list.join(sep))}</div>`;
       }
     }
   }
@@ -195,8 +216,8 @@ function renderLegendary(m) {
   const count = typeof m.legendaryActions === "number" ? m.legendaryActions : 3;
   const preamble = Array.isArray(m.legendaryHeader) && m.legendaryHeader.length
     ? flattenEntries(m.legendaryHeader)
-    : `该生物每轮可使用 ${count} 个传说动作。`;
-  let out = `<div class="sb-sect">★ 传说动作</div>`;
+    : t("sbLegendaryPre", { count });
+  let out = `<div class="sb-sect">★ ${t("sbLegendary")}</div>`;
   out += `<div class="sb-legend-pre">${renderTags(preamble)}</div>`;
   out += m.legendary
     .map((a) => {
@@ -215,9 +236,9 @@ function renderLegendary(m) {
  */
 export function renderStatBlock(m) {
   if (!m || typeof m !== "object") {
-    return `<div class="sb-empty">没有可预览的怪物数据</div>`;
+    return `<div class="sb-empty">${t("sbEmpty")}</div>`;
   }
-  const name = m.name || m.ENG_name || "未命名怪物";
+  const name = m.name || m.ENG_name || t("sbUnnamed");
   const eng = m.ENG_name && m.ENG_name !== m.name ? m.ENG_name : "";
   const cr = (m.cr && typeof m.cr === "object" ? m.cr.cr : m.cr) ?? "?";
   const sub = [parseSizeStr(m.size), parseType(m.type), eng].filter(Boolean).join(" · ");
@@ -242,22 +263,22 @@ export function renderStatBlock(m) {
       <span class="sb-abl-k">${ABBR[k]}</span>
       <span class="sb-abl-s">${esc(score)}</span>
       <span class="sb-abl-m">${fmtMod(aMod)}</span>
-      <span class="sb-abl-save" title="豁免">豁免 ${fmtMod(saveBn)}</span>
+      <span class="sb-abl-save" title="${t("sbSave")}">${t("sbSave")} ${fmtMod(saveBn)}</span>
     </div>`;
   }).join("");
 
   const metaRow = (label, value) =>
     value ? `<div class="sb-meta-row"><span class="sb-meta-l">${esc(label)}</span><span class="sb-meta-v">${value}</span></div>` : "";
-  const passive = typeof m.passive === "number" ? `被动察觉 ${m.passive}` : "";
-  const sensesFull = [formatList(m.senses), passive].filter(Boolean).join("、");
+  const passive = typeof m.passive === "number" ? t("sbPassive", { n: m.passive }) : "";
+  const sensesFull = [formatList(m.senses), passive].filter(Boolean).join(LANG === "en" ? ", " : "、");
   const meta = [
-    metaRow("技能", formatSkills(m.skill)),
-    metaRow("感知", sensesFull && renderTags(sensesFull)),
-    metaRow("语言", formatList(m.languages) && renderTags(formatList(m.languages))),
-    metaRow("抗性", formatDmgList(m.resist)),
-    metaRow("免疫", formatDmgList(m.immune)),
-    metaRow("易伤", formatDmgList(m.vulnerable)),
-    metaRow("状态免疫", formatDmgList(m.conditionImmune)),
+    metaRow(t("sbSkill"), formatSkills(m.skill)),
+    metaRow(t("sbSenses"), sensesFull && renderTags(sensesFull)),
+    metaRow(t("sbLanguages"), formatList(m.languages) && renderTags(formatList(m.languages))),
+    metaRow(t("sbResist"), formatDmgList(m.resist)),
+    metaRow(t("sbImmune"), formatDmgList(m.immune)),
+    metaRow(t("sbVuln"), formatDmgList(m.vulnerable)),
+    metaRow(t("sbCondImmune"), formatDmgList(m.conditionImmune)),
   ].filter(Boolean).join("");
 
   return `
@@ -270,15 +291,15 @@ export function renderStatBlock(m) {
         <div class="sb-stat hp"><span class="sb-stat-k">HP</span><span class="sb-stat-v">${esc(hp)}</span></div>
         <div class="sb-stat ac"><span class="sb-stat-k">AC</span><span class="sb-stat-v">${esc(ac)}</span></div>
         <div class="sb-stat cr"><span class="sb-stat-k">CR</span><span class="sb-stat-v">${esc(cr)}</span></div>
-        <div class="sb-stat spd"><span class="sb-stat-k">速度</span><span class="sb-stat-v">${esc(speed)}</span></div>
+        <div class="sb-stat spd"><span class="sb-stat-k">${t("sbSpeed")}</span><span class="sb-stat-v">${esc(speed)}</span></div>
       </div>
       <div class="sb-abil">${abilGrid}</div>
       ${meta ? `<div class="sb-meta">${meta}</div>` : ""}
-      ${sectionHtml(m.trait, "trait", "✦ 特性")}
+      ${sectionHtml(m.trait, "trait", "✦ " + t("sbSecTrait"))}
       ${renderSpellcasting(m.spellcasting)}
-      ${sectionHtml(m.action, "", "⚔ 动作")}
-      ${sectionHtml(m.bonus, "bonus", "⚡ 附赠动作")}
-      ${sectionHtml(m.reaction, "reaction", "🛡 反应")}
+      ${sectionHtml(m.action, "", "⚔ " + t("sbSecAction"))}
+      ${sectionHtml(m.bonus, "bonus", "⚡ " + t("sbSecBonus"))}
+      ${sectionHtml(m.reaction, "reaction", "🛡 " + t("sbSecReaction"))}
       ${renderLegendary(m)}
     </div>
   `;
