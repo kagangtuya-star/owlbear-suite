@@ -1781,16 +1781,21 @@ if (btnRenderMode) {
                          "auto";
     setStatusRenderMode(next);
     refreshRenderModeLabel();
-    // Force-resync visible tokens so the mode flip lands right away.
+    // Force-resync so the mode flip lands right away. ONE coalesced
+    // full pass via the catalog-changed handler (which clears the
+    // background's sig snapshot before syncing — required because
+    // tokenSyncKey doesn't encode the render mode). The old per-token
+    // BC_REFRESH_TOKEN loop spawned N concurrent un-serialized
+    // refreshes on a 30-token scene.
     try {
-      const items = await OBR.scene.items.getItems();
-      for (const it of items) {
-        if ((it as any).type !== "IMAGE") continue;
-        try {
-          OBR.broadcast.sendMessage(BC_REFRESH_TOKEN, { tokenId: it.id }, { destination: "LOCAL" });
-        } catch {}
-      }
-    } catch {}
+      await OBR.broadcast.sendMessage(
+        "com.obr-suite/status/catalog-changed",
+        {},
+        { destination: "LOCAL" },
+      );
+    } catch (e) {
+      console.warn("[status/palette] render-mode resync broadcast failed", e);
+    }
   });
 }
 window.addEventListener("keydown", async (e) => {
@@ -1887,6 +1892,25 @@ fileImport.addEventListener("change", async () => {
 
 OBR.onReady(async () => {
   installDebugOverlay();
+  // Bubble items are rendered by the GM client only (sole-writer
+  // design in modules/statusTracker) — a player flipping the
+  // per-client render mode would see the label cycle and nothing
+  // change on canvas. Hide the button for players instead of leaving
+  // a dead control.
+  try {
+    const role = await OBR.player.getRole();
+    if (role !== "GM" && btnRenderMode) btnRenderMode.style.display = "none";
+  } catch (e) {
+    console.warn("[status/palette] getRole failed — leaving render-mode button visible", e);
+  }
+  try {
+    OBR.player.onChange((p) => {
+      if (!btnRenderMode) return;
+      if (p.role) btnRenderMode.style.display = p.role === "GM" ? "" : "none";
+    });
+  } catch (e) {
+    console.warn("[status/palette] player.onChange subscribe failed", e);
+  }
   // i18n — translate the static toolbar chrome once, then re-translate
   // + re-render every dynamic surface whenever the language flips.
   applyI18nDom(getLocalLang());

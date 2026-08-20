@@ -10,8 +10,12 @@
  *   2. Swap image / grid / scale / name to the new form and bind its
  *      bestiary data + bubbles HP/AC metadata.
  *
- * "解除变身" pops the top snapshot and restores it — so nested
- * transforms (A → B → revert → A → revert → original) work.
+ * "解除变身" pops the top snapshot and restores it. Nested transforms
+ * are FORBIDDEN since 2026-08-20 (checklist §4): while the stack is
+ * non-empty, both context menus hide 变身 and applyTransform refuses —
+ * including racing / UI-bypassing broadcasts, blocked inside the
+ * updateItems draft. Multi-entry stacks written by OLD builds are left
+ * untouched and still unwind layer by layer via 解除变身.
  *
  * Ownership model: each player transforms tokens THEY created
  * (createdUserId === own id); the GM can transform anything. The image
@@ -251,6 +255,20 @@ async function applyTransform(itemId: string, form: TransformForm): Promise<void
     try { await OBR.notification.show(en ? "You don't have permission to transform this token" : "你没有权限变身这个 token", "WARNING"); } catch {}
     return;
   }
+  // Nesting guard, layer 1 of 2: refuse while already transformed. This
+  // covers both broadcast entry points (BC_TRANSFORM_PICK from a stale
+  // picker, raw BC_APPLY_FORM). Layer 2 re-checks inside the draft
+  // because two calls can both pass this read before either writes.
+  const preStack = readStack(item);
+  if (preStack.length > 0) {
+    console.warn("[transform] apply refused: stack non-empty", {
+      itemId,
+      stackDepth: preStack.length,
+      form: form.label ?? form.name,
+    });
+    try { await OBR.notification.show(en ? "Revert this token before transforming it again" : "请先解除当前变身，再进行新的变身", "WARNING"); } catch {}
+    return;
+  }
   // Build the snapshot from the LIVE item before we mutate it.
   const img = item.image;
   const snap: TransformSnapshot = {
@@ -284,10 +302,20 @@ async function applyTransform(itemId: string, form: TransformForm): Promise<void
   const newOffset = { x: form.image.width / 2, y: form.image.height / 2 };
   const footprint = Math.max(0.25, form.footprint || 1);
 
+  // Nesting guard, layer 2: the draft callback runs against the
+  // authoritative current item state, so a racer that pushed between
+  // our pre-check read and this write is visible here. Skip the entire
+  // mutation for that draft — a half-applied form over a foreign
+  // snapshot would corrupt the stack.
+  let blockedNested = false;
   try {
     await OBR.scene.items.updateItems([itemId], (drafts) => {
       for (const d of drafts) {
         const stack = readStack(d as Item);
+        if (stack.length > 0) {
+          blockedNested = true;
+          continue;
+        }
         stack.push(snap);
         (d.metadata as any)[META_STACK] = stack;
 
@@ -322,6 +350,14 @@ async function applyTransform(itemId: string, form: TransformForm): Promise<void
     });
   } catch (e) {
     console.error("[transform] applyTransform updateItems failed", e);
+    return;
+  }
+  if (blockedNested) {
+    console.warn("[transform] apply blocked in draft: stack became non-empty during apply", {
+      itemId,
+      form: form.label ?? form.name,
+    });
+    try { await OBR.notification.show(en ? "Revert this token before transforming it again" : "请先解除当前变身，再进行新的变身", "WARNING"); } catch {}
   }
 }
 
@@ -441,6 +477,12 @@ export async function setupTransform(): Promise<void> {
             every: [
               { key: "type", value: "IMAGE" },
               { key: "layer", value: "CHARACTER" },
+              // NO stack condition here (unlike the player menu): the
+              // picker is also the ONLY way to edit the per-token
+              // transform POLICY, and the GM must be able to revoke or
+              // tighten it while a player transform is active. Picking
+              // a monster for an already-transformed token is refused
+              // by handleSpawn + applyTransform's guards instead.
             ],
             max: 1,
           },
@@ -474,6 +516,7 @@ export async function setupTransform(): Promise<void> {
               { key: "type", value: "IMAGE" },
               { key: "layer", value: "CHARACTER" },
               { key: ["metadata", META_POLICY, "enabled"], value: true },
+              { key: ["metadata", META_STACK], value: undefined },
             ],
             max: 1,
           },
@@ -491,6 +534,11 @@ export async function setupTransform(): Promise<void> {
               : "这个 token 还没有为你开启变身权限",
             "WARNING",
           );
+          return;
+        }
+        if (readStack(item).length > 0) {
+          console.warn("[transform] ctx-transform-player refused: stack non-empty", { itemId: id });
+          void OBR.notification.show(en ? "Revert this token before transforming it again" : "请先解除当前变身，再进行新的变身", "WARNING");
           return;
         }
         void openMonsterPicker(id);

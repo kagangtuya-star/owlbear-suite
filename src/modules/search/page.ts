@@ -20,6 +20,7 @@ import {
   forceReloadLocalContent,
   BC_LOCAL_CONTENT_CHANGED,
 } from "../../utils/localContent";
+import { groupSpellcastingByDisplay } from "../bestiary/spellcasting-display";
 
 // Suite-version of the search bar — independent top-right popover with
 // its OWN visible input row (not driven by cluster). The popover resizes
@@ -1155,21 +1156,25 @@ function renderMonster(entry: Entry, data: DataEntry): string {
     parts.push("<h4>特性</h4>");
     for (const t of data.trait) parts.push(renderTrait(t));
   }
-  if (data.spellcasting?.length) {
-    for (const sc of data.spellcasting) parts.push(renderSpellcasting(sc));
-  }
-  if (data.action?.length) {
-    parts.push("<h4>动作</h4>");
-    for (const t of data.action) parts.push(renderTrait(t));
-  }
-  if (data.bonus?.length) {
-    parts.push("<h4>附赠动作</h4>");
-    for (const t of data.bonus) parts.push(renderTrait(t));
-  }
-  if (data.reaction?.length) {
-    parts.push("<h4>反应</h4>");
-    for (const t of data.reaction) parts.push(renderTrait(t));
-  }
+  // displayAs routing (checklist §5) — mirrors the monster-info
+  // popover: flagged entries render inside 动作/附赠动作/反应 after the
+  // native rows; unflagged ones stay in the default spellcasting spot.
+  const scGroups = groupSpellcastingByDisplay(
+    data.spellcasting ?? [],
+    `${data.ENG_name || data.name || entry.n} (${data.source ?? "?"})`,
+    "[obr-suite/search]",
+  );
+  for (const sc of scGroups.default) parts.push(renderSpellcasting(sc));
+  const pushActionSection = (title: string, native: any[] | undefined, spellEntries: any[]) => {
+    const hasNative = Array.isArray(native) && native.length > 0;
+    if (!hasNative && spellEntries.length === 0) return;
+    parts.push(`<h4>${title}</h4>`);
+    if (hasNative) for (const t of native!) parts.push(renderTrait(t));
+    for (const sc of spellEntries) parts.push(renderSpellcasting(sc));
+  };
+  pushActionSection("动作", data.action, scGroups.action);
+  pushActionSection("附赠动作", data.bonus, scGroups.bonus);
+  pushActionSection("反应", data.reaction, scGroups.reaction);
   if (data.legendary?.length) {
     parts.push("<h4>传奇动作</h4>");
     if (data.legendaryHeader) parts.push(renderEntries(data.legendaryHeader));

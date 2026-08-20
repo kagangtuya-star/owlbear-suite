@@ -1258,7 +1258,7 @@ function CombatSection({ data }: { data: CharacterData }) {
           const dmgExpr = dmgMatch ? dmgMatch[0] : dmgRaw;
           if (editing) {
             return (
-              <div class="weap" style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 1fr 1fr auto", gap: "6px", alignItems: "center" }}>
+              <div class="weap weap-edit" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(54px,0.7fr) minmax(68px,1fr) minmax(0,1fr) auto", gap: "6px", alignItems: "center", minWidth: 0 }}>
                 <input class="cc-edit-text" type="text"
                   value={w.name ?? ""}
                   placeholder={T("ccWeaponNamePh")}
@@ -1976,7 +1976,7 @@ function InventorySection({ data }: { data: CharacterData }) {
             {items.map((it: any, idx: number) => {
               if (editing) {
                 return (
-                  <div class="weap" style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr 0.8fr auto", gap: "6px", alignItems: "center" }}>
+                  <div class="weap weap-edit" style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) minmax(48px,0.6fr) minmax(0,0.8fr) auto", gap: "6px", alignItems: "center", minWidth: 0 }}>
                     <input class="cc-edit-text" type="text"
                       value={it.name ?? ""}
                       placeholder={T("ccItemNamePh")}

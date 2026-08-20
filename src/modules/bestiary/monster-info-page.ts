@@ -15,6 +15,7 @@ import {
   type BubblesData,
 } from "../../utils/statEdit";
 import { mountResourcePanel } from "../resourceTracker/panel";
+import { groupSpellcastingByDisplay } from "./spellcasting-display";
 import { getLocalLang, onLangChange } from "../../state";
 
 // 2026-05-10: language-aware section titles, ability labels, save /
@@ -500,10 +501,12 @@ function renderSpellGroup(label: string, arr: any): string {
   return `<div class="spell-line"><span class="sl">${label}</span>${sp}</div>`;
 }
 
-function renderSpellcasting(sc: any): string {
+/** Body blocks only, no section header — the caller decides which
+ *  section (施法 or a displayAs-routed 动作/附赠动作/反应) hosts them. */
+function renderSpellcastingBlocks(sc: any): string {
   if (!Array.isArray(sc) || sc.length === 0) return "";
   const en = _curLang === "en";
-  const blocks = sc.map((entry: any) => {
+  return sc.map((entry: any) => {
     const name = entry.name || (en ? "Spellcasting" : "施法");
     const header = flattenEntries(entry.headerEntries);
     const leveled = renderSpellLevels(entry.spells);
@@ -515,8 +518,14 @@ function renderSpellcasting(sc: any): string {
       ${header ? `<div class="t">${formatTagsClickable(header)}</div>` : ""}
       ${will}${daily}${rest}${leveled}
     </div>`;
-  });
-  return `<div class="sect">${ICONS.sparkles} ${en ? "Spellcasting" : "施法"}</div>${blocks.join("")}`;
+  }).join("");
+}
+
+function renderSpellcasting(sc: any): string {
+  const blocks = renderSpellcastingBlocks(sc);
+  if (!blocks) return "";
+  const en = _curLang === "en";
+  return `<div class="sect">${ICONS.sparkles} ${en ? "Spellcasting" : "施法"}</div>${blocks}`;
 }
 
 function renderLegendary(m: any, displayName: string): string {
@@ -790,11 +799,38 @@ function render(m: any) {
         reactions: "Reactions" }
     : { traits: "特性", actions: "动作", bonus: "附赠动作", reactions: "反应" };
 
+  // displayAs routing (checklist §5): spellcasting entries flagged
+  // action/bonus/reaction render inside those sections (after the
+  // native rows); the rest stay under 施法. If the target section had
+  // no native rows, the routed blocks bring their own section header.
+  const scGroups = groupSpellcastingByDisplay(
+    m.spellcasting,
+    String(m.ENG_name || m.name || currentSlug || "?"),
+    "[monster-info]",
+  );
+  const appendSpellBlocks = (section: string, entries: any[], title: string) => {
+    const blocks = renderSpellcastingBlocks(entries);
+    if (!blocks) return section;
+    return `${section || `<div class="sect">${title}</div>`}${blocks}`;
+  };
+
   const traits = sectionHtml(m.trait, "trait", `${ICONS.sparkle4} ${sectTitles.traits}`);
-  const spellcasting = renderSpellcasting(m.spellcasting);
-  const actions = sectionHtml(m.action, "", `${ICONS.swords} ${sectTitles.actions}`);
-  const bonus = sectionHtml(m.bonus, "bonus", `${ICONS.zap} ${sectTitles.bonus}`);
-  const reactions = sectionHtml(m.reaction, "reaction", `${ICONS.shield} ${sectTitles.reactions}`);
+  const spellcasting = renderSpellcasting(scGroups.default);
+  const actions = appendSpellBlocks(
+    sectionHtml(m.action, "", `${ICONS.swords} ${sectTitles.actions}`),
+    scGroups.action,
+    `${ICONS.swords} ${sectTitles.actions}`,
+  );
+  const bonus = appendSpellBlocks(
+    sectionHtml(m.bonus, "bonus", `${ICONS.zap} ${sectTitles.bonus}`),
+    scGroups.bonus,
+    `${ICONS.zap} ${sectTitles.bonus}`,
+  );
+  const reactions = appendSpellBlocks(
+    sectionHtml(m.reaction, "reaction", `${ICONS.shield} ${sectTitles.reactions}`),
+    scGroups.reaction,
+    `${ICONS.shield} ${sectTitles.reactions}`,
+  );
   const legendary = renderLegendary(m, name);
 
   // Combined attribute pane content — chips / abilities / meta /

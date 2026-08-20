@@ -103,6 +103,53 @@ export async function addResource(
   }
 }
 
+// Written by the character-card bind flow before it repairs legacy
+// degenerate/duplicate resource ids (checklist §2). Mirrored in
+// characterCards/bind-page.ts — keep the literal in sync.
+export const RESOURCES_BACKUP_KEY = "com.obr-suite/resources/backup-pre-idfix";
+
+/** Roll back the resource-id repair as an ID-ONLY inverse: every entry
+ *  stamped with `legacyId` gets that id back (and the stamp removed);
+ *  current/max values, resources added since the repair, and every
+ *  untouched entry are preserved. Restoring the full backup snapshot
+ *  instead would silently destroy all state accrued since the repair
+ *  — the snapshot stays in metadata purely as audit evidence until the
+ *  rollback deletes it. Returns the reverted-entry count, or null when
+ *  there is nothing to revert / the write fails. */
+export async function restoreResourceIdBackup(itemId: string): Promise<number | null> {
+  let reverted: number | null = null;
+  try {
+    await OBR.scene.items.updateItems([itemId], (drafts) => {
+      const d = drafts[0];
+      if (!d) return;
+      const arr = (d.metadata as any)?.[RESOURCES_KEY];
+      const hasBackup = RESOURCES_BACKUP_KEY in (d.metadata as any);
+      if (!Array.isArray(arr) && !hasBackup) return;
+      let n = 0;
+      if (Array.isArray(arr)) {
+        for (const r of arr) {
+          if (r && typeof r === "object" && typeof (r as any).legacyId === "string") {
+            (r as any).id = (r as any).legacyId;
+            delete (r as any).legacyId;
+            n++;
+          }
+        }
+      }
+      if (hasBackup) delete (d.metadata as any)[RESOURCES_BACKUP_KEY];
+      reverted = n;
+    });
+    if (reverted === null) {
+      console.warn("[obr-suite/resources] restoreResourceIdBackup: nothing to revert on item", { itemId });
+    } else {
+      console.info("[obr-suite/resources] reverted resource-id repair (id-only)", { itemId, entries: reverted });
+    }
+  } catch (e) {
+    console.error("[obr-suite/resources] restoreResourceIdBackup failed", { itemId, error: e });
+    return null;
+  }
+  return reverted;
+}
+
 /** Remove a resource by id. */
 export async function deleteResource(
   itemId: string,

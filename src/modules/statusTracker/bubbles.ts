@@ -933,11 +933,17 @@ async function hydrateLocalCache(tokenId: string): Promise<Map<string, string>> 
       const sig = (it.metadata?.[SIG_KEY] as string) ?? `__legacy_${Math.random()}`;
       map.set(it.id, sig);
     }
-  } catch {}
+  } catch (e) {
+    logErr(`scene.local.getItems(token=${tokenId}) failed [stage=hydrate-local]`, e);
+  }
   return map;
 }
 
-export async function syncTokenBuffs(token: Image, buffs: BuffDef[]): Promise<void> {
+/** Returns false when the scene write failed (delete or add rejected):
+ *  the caller must NOT record the token as synced, or the key-compare
+ *  skip would block the retry forever and the invalidated cache never
+ *  gets its self-heal pass. */
+export async function syncTokenBuffs(token: Image, buffs: BuffDef[]): Promise<boolean> {
   let sceneDpi = 150;
   try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
   const desc = describe(token, buffs, sceneDpi);
@@ -1003,42 +1009,48 @@ export async function syncTokenBuffs(token: Image, buffs: BuffDef[]): Promise<vo
   // so anything sitting there is leftover from before this refactor.
   const localToDelete = Array.from(existingLocal.keys());
 
-  // 4) Parallel execute. Delete is collapsed into a single OBR call;
-  //    add is a single call; both fire concurrently. Wall-clock time
-  //    drops to one round trip vs the previous 2-3 sequential awaits.
-  //
-  //    Safety: items in toAdd carry stable ids that match toDelete
-  //    entries (for sig-changed buffs). OBR processes both deltas in
-  //    parallel — if delete somehow lands AFTER add, the new item
-  //    would be removed. Empirically this hasn't happened (OBR seems
-  //    to enqueue ops in receive order), but we keep an error-recovery
-  //    path: any failure invalidates the cache so the next sync
-  //    re-hydrates from scene and self-heals.
-  const ops: Promise<unknown>[] = [];
+  // 4) Two-phase execute (checklist §1): DELETE first, AWAIT it, then
+  //    add. toAdd reuses the stable ids of sig-changed toDelete
+  //    entries — if OBR ever processed the add before the delete, the
+  //    delete would erase the freshly-added bubble. The old code fired
+  //    both in one Promise.all and relied on "empirically hasn't
+  //    happened"; now the add only runs after the delete round-trip
+  //    confirms, and is skipped entirely when the delete FAILED (the
+  //    invalidated cache makes the next sync re-hydrate + self-heal).
+  //    Pure additions (toDelete empty) still cost one round-trip.
+  let sceneDeleteFailed = false;
+  let sceneAddFailed = false;
+  const deleteOps: Promise<unknown>[] = [];
   if (toDelete.length > 0) {
-    ops.push(
+    deleteOps.push(
       OBR.scene.items.deleteItems(toDelete).catch((e) => {
-        logErr(`scene.items.deleteItems(token=${token.id}) failed`, e);
+        sceneDeleteFailed = true;
+        logErr(`deleteItems(token=${token.id}) failed [stage=delete, ids=${toDelete.join(",")}]`, e);
         invalidateTokenBuffCache(token.id);
       }),
     );
   }
   if (localToDelete.length > 0) {
-    ops.push(
-      OBR.scene.local.deleteItems(localToDelete).catch(() => {
+    deleteOps.push(
+      OBR.scene.local.deleteItems(localToDelete).catch((e) => {
+        logErr(`local.deleteItems(token=${token.id}) failed [stage=delete-local, ids=${localToDelete.join(",")}]`, e);
         invalidateTokenBuffCache(token.id);
       }),
     );
   }
-  if (toAdd.length > 0) {
-    ops.push(
-      OBR.scene.items.addItems(toAdd).catch((e) => {
-        logErr(`addItems(token=${token.id}) failed`, e);
-        invalidateTokenBuffCache(token.id);
-      }),
+  await Promise.all(deleteOps);
+  if (toAdd.length > 0 && !sceneDeleteFailed) {
+    await OBR.scene.items.addItems(toAdd).catch((e) => {
+      sceneAddFailed = true;
+      logErr(`addItems(token=${token.id}) failed [stage=add, ids=${toAddIds.join(",")}]`, e);
+      invalidateTokenBuffCache(token.id);
+    });
+  } else if (toAdd.length > 0) {
+    logErr(
+      `addItems(token=${token.id}) skipped [stage=add, ids=${toAddIds.join(",")}]: prior delete failed — caller must not record this token as synced`,
+      null,
     );
   }
-  await Promise.all(ops);
 
   // 5) Update cache to match the post-sync state. If we just
   //    invalidated (above catch path), don't repopulate — the next
@@ -1057,6 +1069,7 @@ export async function syncTokenBuffs(token: Image, buffs: BuffDef[]): Promise<vo
     tokenW: desc.tokenW, tokenH: desc.tokenH,
     ringRadius: desc.ringRadius,
   });
+  return !sceneDeleteFailed && !sceneAddFailed;
 }
 
 // === Token hit-test (used by capture overlay for manage-transfer) ====
@@ -1123,6 +1136,12 @@ function hasPluginMetadata(item: Item): boolean {
  * alongside the new curved band; that's exactly what the legacy
  * `buildShape().shapeType("RECTANGLE")` items rendered as. */
 export async function sweepAllOurItems(): Promise<void> {
+  // The sweep deletes every bubble item — the sig caches now describe
+  // items that no longer exist. Leaving them populated made the next
+  // sync diff to zero ops, so bubbles never re-appeared after a scene
+  // switch / GM handoff (checklist §1). Invalidate FIRST so even a
+  // partially-failed sweep re-hydrates from the real scene state.
+  invalidateAllBuffCaches();
   try {
     const ours = await OBR.scene.items.getItems(hasPluginMetadata);
     if (ours.length > 0) {
@@ -1139,6 +1158,11 @@ export async function sweepAllOurItems(): Promise<void> {
   } catch (e) {
     logErr("sweepAllOurItems(scene.local) failed", e);
   }
+  // Invalidate AGAIN after the deletes: a sync pass whose hydrate read
+  // raced this sweep may have repopulated the caches with pre-sweep
+  // state in the meantime (belt to the exclusive-gate braces in
+  // index.ts — callers there serialize, but keep the sweep self-safe).
+  invalidateAllBuffCaches();
   // Reset particles module's internal Map + stop its rAF tick.
   await particles.clearAll();
 }

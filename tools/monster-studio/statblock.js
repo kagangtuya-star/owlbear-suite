@@ -181,11 +181,40 @@ function sectionHtml(items, cls, title) {
   return `<div class="sb-sect">${esc(title)}</div>${rows}`;
 }
 
-function renderSpellcasting(scArr) {
+// displayAs classifier — mirrored plain-JS copy of
+// src/modules/bestiary/spellcasting-display.ts (this tool lives outside
+// the vite/tsc build and cannot import it). Keep the two in sync.
+const _displayAsWarned = new Set();
+function spellcastingDisplayAs(entry, ident) {
+  // != null (not ||): a malformed displayAs of 0/false must reach the
+  // unknown-value warn below exactly like the TS classifier's ?? does —
+  // the authoring tool is where that warning matters most.
+  const raw = String(entry && entry.displayAs != null ? entry.displayAs : "").trim().toLowerCase();
+  if (raw === "" || raw === "trait") return "default";
+  if (raw === "action" || raw === "bonus" || raw === "reaction") return raw;
+  const key = `${ident}|${(entry && entry.name) || ""}|${raw}`;
+  if (!_displayAsWarned.has(key)) {
+    _displayAsWarned.add(key);
+    console.warn("[monster-studio] unknown spellcasting displayAs — falling back to default section", {
+      monster: ident, entryName: entry && entry.name, displayAs: entry && entry.displayAs, fallback: "default",
+    });
+  }
+  return "default";
+}
+
+function groupSpellcastingByDisplay(arr, ident) {
+  const groups = { default: [], action: [], bonus: [], reaction: [] };
+  if (!Array.isArray(arr)) return groups;
+  for (const entry of arr) groups[spellcastingDisplayAs(entry, ident)].push(entry);
+  return groups;
+}
+
+/** Body blocks only — the caller decides which section hosts them. */
+function renderSpellcastingBlocks(scArr) {
   if (!Array.isArray(scArr) || scArr.length === 0) return "";
   const sep = LANG === "en" ? ", " : "、";
   const colon = LANG === "en" ? ": " : "：";
-  let out = `<div class="sb-sect">✦ ${t("sbSpellcasting")}</div>`;
+  let out = "";
   for (const sc of scArr) {
     const header = flattenEntries(sc.headerEntries);
     out += `<div class="sb-act"><span class="sb-act-n">${renderTags(sc.name || t("sbSpellcasting"))}</span>` +
@@ -209,6 +238,21 @@ function renderSpellcasting(scArr) {
     }
   }
   return out;
+}
+
+function renderSpellcasting(scArr) {
+  const blocks = renderSpellcastingBlocks(scArr);
+  if (!blocks) return "";
+  return `<div class="sb-sect">✦ ${t("sbSpellcasting")}</div>${blocks}`;
+}
+
+/** Native section rows + displayAs-routed spellcasting blocks. Emits
+ *  the section header when either half has content. */
+function sectionWithSpellcasting(items, cls, title, scEntries) {
+  const native = sectionHtml(items, cls, title);
+  const blocks = renderSpellcastingBlocks(scEntries);
+  if (!blocks) return native;
+  return `${native || `<div class="sb-sect">${esc(title)}</div>`}${blocks}`;
 }
 
 function renderLegendary(m) {
@@ -242,6 +286,8 @@ export function renderStatBlock(m) {
   const eng = m.ENG_name && m.ENG_name !== m.name ? m.ENG_name : "";
   const cr = (m.cr && typeof m.cr === "object" ? m.cr.cr : m.cr) ?? "?";
   const sub = [parseSizeStr(m.size), parseType(m.type), eng].filter(Boolean).join(" · ");
+  // displayAs routing (mirrors the suite's monster-info / search chains).
+  const scGroups = groupSpellcastingByDisplay(m.spellcasting, String(m.ENG_name || m.name || "?"));
 
   const ac = parseAc(m.ac);
   const hp = parseHp(m.hp);
@@ -296,10 +342,10 @@ export function renderStatBlock(m) {
       <div class="sb-abil">${abilGrid}</div>
       ${meta ? `<div class="sb-meta">${meta}</div>` : ""}
       ${sectionHtml(m.trait, "trait", "✦ " + t("sbSecTrait"))}
-      ${renderSpellcasting(m.spellcasting)}
-      ${sectionHtml(m.action, "", "⚔ " + t("sbSecAction"))}
-      ${sectionHtml(m.bonus, "bonus", "⚡ " + t("sbSecBonus"))}
-      ${sectionHtml(m.reaction, "reaction", "🛡 " + t("sbSecReaction"))}
+      ${renderSpellcasting(scGroups.default)}
+      ${sectionWithSpellcasting(m.action, "", "⚔ " + t("sbSecAction"), scGroups.action)}
+      ${sectionWithSpellcasting(m.bonus, "bonus", "⚡ " + t("sbSecBonus"), scGroups.bonus)}
+      ${sectionWithSpellcasting(m.reaction, "reaction", "🛡 " + t("sbSecReaction"), scGroups.reaction)}
       ${renderLegendary(m)}
     </div>
   `;

@@ -27,7 +27,7 @@
 // circular outlines remain so the drop targets stay legible without
 // occluding the scene.
 
-import OBR, { Image, isImage } from "@owlbear-rodeo/sdk";
+import OBR, { Image, isImage, type Item } from "@owlbear-rodeo/sdk";
 import {
   PLUGIN_ID,
   STATUS_BUFFS_KEY,
@@ -156,14 +156,35 @@ interface RingState {
    *  token twice flip-flops the buff (apply, leave, re-enter →
    *  remove). */
   wasInside: boolean;
+  /** While Date.now() < this, refreshRings must NOT overwrite
+   *  `buffIds` from scene metadata: a toggle just mutated the list
+   *  optimistically and the metadata write hasn't replicated yet —
+   *  the 100ms poll used to clobber the optimistic state with stale
+   *  data mid-stroke, enabling double-apply/double-remove. */
+  buffIdsHoldUntil: number;
 }
 
 const rings = new Map<string, RingState>();
+const OPTIMISTIC_HOLD_MS = 800;
 
-async function refreshRings(): Promise<void> {
-  let items;
-  try { items = await OBR.scene.items.getItems(); }
-  catch { return; }
+// Newest scene snapshot from items.onChange. The 100ms poll exists
+// only for viewport-dependent screen coords — it reuses this snapshot
+// instead of re-fetching the whole scene every tick (checklist §1).
+let lastItems: Item[] | null = null;
+
+async function refreshRings(itemsSnapshot?: Item[]): Promise<void> {
+  let items = itemsSnapshot ?? lastItems;
+  if (!items) {
+    try { items = await OBR.scene.items.getItems(); }
+    catch (e) {
+      console.warn("[status/capture] refreshRings getItems failed", e);
+      return;
+    }
+    // An onChange may have delivered a FRESHER snapshot while the
+    // fetch was in flight — never let the fetch overwrite it.
+    if (lastItems) items = lastItems;
+    else lastItems = items;
+  }
 
   const tokens: Image[] = items.filter((it): it is Image =>
     isImage(it) &&
@@ -175,15 +196,24 @@ async function refreshRings(): Promise<void> {
   let sceneDpi = 150;
   try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
 
+  // One parallel transformPoint batch instead of a sequential await
+  // per token — with 30 tokens the old loop serialized 30 bridge
+  // round-trips inside a 100ms poll.
+  const specs = tokens.map((tok) => getTokenCircleSpec(tok, sceneDpi));
+  const screens = await Promise.all(
+    specs.map((spec) =>
+      OBR.viewport.transformPoint({ x: spec.cx, y: spec.cy }).catch(() => null),
+    ),
+  );
+
   const wantedIds = new Set<string>();
-  for (const tok of tokens) {
+  const now = Date.now();
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    const screen = screens[i];
+    if (!screen) continue;
     wantedIds.add(tok.id);
-    const spec = getTokenCircleSpec(tok, sceneDpi);
-    let screen;
-    try {
-      screen = await OBR.viewport.transformPoint({ x: spec.cx, y: spec.cy });
-    } catch { continue; }
-    const screenRadius = spec.radius * vpScale;
+    const screenRadius = specs[i].radius * vpScale;
 
     // Read current buff list so toggle-mode knows current state.
     const cur = (tok.metadata as any)[STATUS_BUFFS_KEY];
@@ -202,13 +232,14 @@ async function refreshRings(): Promise<void> {
         screenRadius,
         el,
         wasInside: false,
+        buffIdsHoldUntil: 0,
       };
       rings.set(tok.id, r);
     } else {
       r.screenX = screen.x;
       r.screenY = screen.y;
       r.screenRadius = screenRadius;
-      r.buffIds = buffIds;
+      if (now >= r.buffIdsHoldUntil) r.buffIds = buffIds;
     }
     r.el.style.left = `${r.screenX}px`;
     r.el.style.top = `${r.screenY}px`;
@@ -227,8 +258,8 @@ async function refreshRings(): Promise<void> {
 
 // --- Apply / remove / clear helpers ---
 
-async function applyBuff(tokenId: string): Promise<void> {
-  if (!buff) return;
+async function applyBuff(tokenId: string): Promise<boolean> {
+  if (!buff) return false;
   try {
     await OBR.scene.items.updateItems([tokenId], (drafts) => {
       for (const d of drafts) {
@@ -247,13 +278,15 @@ async function applyBuff(tokenId: string): Promise<void> {
         }
       }
     });
+    return true;
   } catch (e) {
-    console.warn("[status/capture] applyBuff failed", tokenId, e);
+    console.warn("[status/capture] applyBuff failed", { tokenId, buffId: buff.id, stage: "apply", error: e });
+    return false;
   }
 }
 
-async function removeBuff(tokenId: string): Promise<void> {
-  if (!buff) return;
+async function removeBuff(tokenId: string): Promise<boolean> {
+  if (!buff) return false;
   try {
     await OBR.scene.items.updateItems([tokenId], (drafts) => {
       for (const d of drafts) {
@@ -270,8 +303,10 @@ async function removeBuff(tokenId: string): Promise<void> {
         }
       }
     });
+    return true;
   } catch (e) {
-    console.warn("[status/capture] removeBuff failed", tokenId, e);
+    console.warn("[status/capture] removeBuff failed", { tokenId, buffId: buff.id, stage: "remove", error: e });
+    return false;
   }
 }
 
@@ -284,14 +319,14 @@ async function clearAll(tokenId: string): Promise<void> {
       }
     });
   } catch (e) {
-    console.warn("[status/capture] clearAll failed", tokenId, e);
+    console.warn("[status/capture] clearAll failed", { tokenId, stage: "clear", error: e });
   }
 }
 
 // Remove a specific buff id from a token's metadata (without
 // mutating module-level `buff`). Used by manage-transfer to clear
 // the source token in addition to the target add.
-async function removeBuffById(tokenId: string, buffId: string): Promise<void> {
+async function removeBuffById(tokenId: string, buffId: string): Promise<boolean> {
   try {
     await OBR.scene.items.updateItems([tokenId], (drafts) => {
       for (const d of drafts) {
@@ -308,8 +343,10 @@ async function removeBuffById(tokenId: string, buffId: string): Promise<void> {
         }
       }
     });
+    return true;
   } catch (e) {
-    console.warn("[status/capture] removeBuffById failed", tokenId, buffId, e);
+    console.warn("[status/capture] removeBuffById failed", { tokenId, buffId, stage: "transfer-remove", error: e });
+    return false;
   }
 }
 
@@ -337,9 +374,23 @@ async function actOnToken(r: RingState): Promise<void> {
     if (!buff || !sourceTokenId) return;
     // Drop on the source itself = revert (no metadata change).
     if (r.tokenId === sourceTokenId) return;
-    // Else transfer: remove from source, add to target.
-    await removeBuffById(sourceTokenId, buff.id);
-    await applyBuff(r.tokenId);
+    // Transfer = ADD to target first, THEN remove from source. The old
+    // remove-then-add order could lose the buff entirely when the add
+    // half failed. Worst case now is buff-on-both, which is visible
+    // and manually fixable — never silent data loss.
+    const added = await applyBuff(r.tokenId);
+    if (!added) {
+      console.warn("[status/capture] manage-transfer aborted: target add failed", {
+        buffId: buff.id, sourceTokenId, targetTokenId: r.tokenId, stage: "transfer-add",
+      });
+      return;
+    }
+    const removed = await removeBuffById(sourceTokenId, buff.id);
+    if (!removed) {
+      console.warn("[status/capture] manage-transfer: source remove failed — buff now on BOTH tokens", {
+        buffId: buff.id, sourceTokenId, targetTokenId: r.tokenId, stage: "transfer-remove",
+      });
+    }
     return;
   }
   if (kind === "preset") {
@@ -357,13 +408,18 @@ async function actOnToken(r: RingState): Promise<void> {
     return;
   }
   if (!buff) return;
-  // kind === "buff": original apply/toggle behaviour.
+  // kind === "buff": original apply/toggle behaviour. The optimistic
+  // buffIds mutation is held against refreshRings clobbering it with
+  // not-yet-replicated metadata (see RingState.buffIdsHoldUntil).
+  r.buffIdsHoldUntil = Date.now() + OPTIMISTIC_HOLD_MS;
   if (r.buffIds.includes(buff.id)) {
-    await removeBuff(r.tokenId);
-    r.buffIds = r.buffIds.filter((x) => x !== buff.id);
+    const ok = await removeBuff(r.tokenId);
+    if (ok) r.buffIds = r.buffIds.filter((x) => x !== buff.id);
+    else r.buffIdsHoldUntil = 0;
   } else {
-    await applyBuff(r.tokenId);
-    r.buffIds = [...r.buffIds, buff.id];
+    const ok = await applyBuff(r.tokenId);
+    if (ok) r.buffIds = [...r.buffIds, buff.id];
+    else r.buffIdsHoldUntil = 0;
   }
 }
 
@@ -619,8 +675,17 @@ async function endDrag(): Promise<void> {
 const unsubs: Array<() => void> = [];
 
 OBR.onReady(async () => {
+  // Subscribe BEFORE the initial fetch: a change landing during the
+  // fetch round-trip would otherwise be missed, and since the poll
+  // reuses lastItems (no re-fetch), the stale snapshot would persist
+  // until the next unrelated scene change.
+  unsubs.push(OBR.scene.items.onChange((items) => {
+    lastItems = items;
+    void refreshRings(items);
+  }));
   await refreshRings();
-  unsubs.push(OBR.scene.items.onChange(() => { void refreshRings(); }));
+  // The 100ms poll only re-projects screen coords from the stored
+  // snapshot (zero getItems) — onChange is the data source.
   const pollId = setInterval(() => { void refreshRings(); }, 100);
   unsubs.push(() => clearInterval(pollId));
 });

@@ -94,6 +94,9 @@ const BROADCAST_BLINK_DONE = `${PLUGIN_ID}/blink-done`;
 
 const unsubs: Array<() => void> = [];
 let role: "GM" | "PLAYER" = "PLAYER";
+// Cached at setup (and refreshed on player change) so the items.onChange
+// hot path doesn't await OBR.player.getId() on every scene update.
+let myPlayerId = "";
 
 // --- Drag-to-draw state ---
 // `dragStart` is the user's first pointerdown — it becomes the CENTER
@@ -145,7 +148,7 @@ let destPopoverSafetyTimer: ReturnType<typeof setTimeout> | null = null;
 let blinkModalOpen = false;
 // Payload latched at destination-pick time. The blink modal asks for
 // it via BROADCAST_BLINK_PROCEED at the apex of the close animation.
-let pendingTeleport: { destPortalId: string; tokenIds: string[] } | null = null;
+let pendingTeleport: { destPortalId: string; tokenIds: string[]; entryId?: string } | null = null;
 // 2026-05-12 — second job kind: "blink + focus camera ONLY" (no token
 // move). Used by the initiative tracker's "集结角色到此处" feature so
 // every client gets the same blink + viewport snap that a portal
@@ -578,15 +581,65 @@ async function handleDMSelectionForEdit(selection: string[] | undefined) {
 
 const movedByMeIds = new Set<string>();
 
-async function onItemsMaybeDragging(items: Item[]) {
-  let myId = "";
-  try { myId = await OBR.player.getId(); } catch {}
-  if (!myId) return;
+// Bumped every time onItemsMaybeDragging processes an onChange. A
+// rebuild whose getItems resolves AFTER a live onChange has been
+// processed must not clobber the fresher state (clearing lastTokenPos
+// and cancelling dragEndTimer would swallow a drag that started right
+// after scene-ready — the exact first-drag bug class of checklist §3).
+let dragStateGeneration = 0;
 
-  let didMove = false;
+/** Seed lastTokenPos with the current position of EVERY movable
+ *  CHARACTER/MOUNT token. Run at scene start (setup + onReadyChange)
+ *  so the very first drag has a baseline to diff against — the drag
+ *  itself often arrives as a single batched items.onChange carrying
+ *  only the final position, and the old selection-watcher seeding
+ *  raced that event (checklist §3). */
+async function rebuildDragBaseline(reason: string): Promise<void> {
+  const genAtStart = dragStateGeneration;
+  let items: Item[];
+  try {
+    items = await OBR.scene.items.getItems();
+  } catch (e) {
+    console.error("[obr-suite/portals] drag baseline rebuild failed", { reason, error: e });
+    return;
+  }
+  if (dragStateGeneration !== genAtStart) {
+    // A live onChange seeded fresher state (and possibly armed a drag
+    // debounce) while we awaited — merge instead of clobbering: fill
+    // only the gaps, touch nothing else.
+    for (const it of items) {
+      if (it.layer !== "CHARACTER" && it.layer !== "MOUNT") continue;
+      if (isPortal(it)) continue;
+      if (!lastTokenPos.has(it.id)) {
+        lastTokenPos.set(it.id, { x: it.position.x, y: it.position.y });
+      }
+    }
+    return;
+  }
+  lastTokenPos.clear();
+  movedByMeIds.clear();
+  if (dragEndTimer) {
+    clearTimeout(dragEndTimer);
+    dragEndTimer = null;
+  }
   for (const it of items) {
     if (it.layer !== "CHARACTER" && it.layer !== "MOUNT") continue;
     if (isPortal(it)) continue;
+    lastTokenPos.set(it.id, { x: it.position.x, y: it.position.y });
+  }
+}
+
+async function onItemsMaybeDragging(items: Item[]) {
+  dragStateGeneration++;
+  const myId = myPlayerId;
+  if (!myId) return;
+
+  let didMove = false;
+  const liveMovableIds = new Set<string>();
+  for (const it of items) {
+    if (it.layer !== "CHARACTER" && it.layer !== "MOUNT") continue;
+    if (isPortal(it)) continue;
+    liveMovableIds.add(it.id);
     // Only attribute moves where THIS client is the last writer.
     // Other clients see the change but didn't initiate it.
     if ((it as any).lastModifiedUserId !== myId) {
@@ -602,6 +655,13 @@ async function onItemsMaybeDragging(items: Item[]) {
     }
     lastTokenPos.set(it.id, { x: it.position.x, y: it.position.y });
   }
+  // lastTokenPos is maintained as a FULL scene snapshot (onChange
+  // delivers the complete item list): prune only tokens that left the
+  // scene. The old per-selection prune destroyed baselines every time
+  // the selection changed, which was one of the first-drag bugs.
+  for (const id of lastTokenPos.keys()) {
+    if (!liveMovableIds.has(id)) lastTokenPos.delete(id);
+  }
 
   if (!didMove) return;
   // Any genuine drag dismisses the destination popover so the user
@@ -613,7 +673,7 @@ async function onItemsMaybeDragging(items: Item[]) {
   if (dragEndTimer) clearTimeout(dragEndTimer);
   dragEndTimer = setTimeout(() => {
     dragEndTimer = null;
-    onDragEnd().catch(() => {});
+    onDragEnd().catch((e) => console.error("[obr-suite/portals] onDragEnd failed", e));
   }, DRAG_END_MS);
 }
 
@@ -628,7 +688,12 @@ async function onDragEnd() {
   if (movedNow.size === 0) return;
 
   let items: Item[];
-  try { items = await OBR.scene.items.getItems(); } catch { return; }
+  try {
+    items = await OBR.scene.items.getItems();
+  } catch (e) {
+    console.error("[obr-suite/portals] drag-end getItems failed", { movedIds: [...movedNow], error: e });
+    return;
+  }
 
   const portals = items.filter(isPortal);
   if (portals.length === 0) return;
@@ -803,6 +868,9 @@ async function openDestinationPopover(
   const payload = {
     entryName: entryMeta.name || _t("portalUnnamed"),
     entryTag: entryMeta.tag,
+    // Threaded through the popover → BROADCAST_TELEPORT → teleport()
+    // chain purely so failure logs can name the entry portal.
+    entryId: entryPortal.id,
     candidates,
     tokenIds,
     placeBelow,
@@ -845,9 +913,9 @@ async function closeDestinationPopover() {
 // closed (camera moves instantly via setPosition during the closed
 // window so no visible canvas snap), then the modal opens the eyes
 // onto the destination and closes itself.
-async function openBlinkAndTeleport(destPortalId: string, tokenIds: string[]) {
+async function openBlinkAndTeleport(destPortalId: string, tokenIds: string[], entryId?: string) {
   if (blinkModalOpen) return;
-  pendingTeleport = { destPortalId, tokenIds };
+  pendingTeleport = { destPortalId, tokenIds, entryId };
   blinkModalOpen = true;
   try {
     await OBR.modal.open({
@@ -865,7 +933,7 @@ async function openBlinkAndTeleport(destPortalId: string, tokenIds: string[]) {
     blinkModalOpen = false;
     pendingTeleport = null;
     // Fall back to plain teleport so the user isn't stranded.
-    await teleport(destPortalId, tokenIds, false);
+    await teleport(destPortalId, tokenIds, false, entryId);
   }
 }
 
@@ -1202,7 +1270,7 @@ async function moveTokensWithFogBypass(
       });
     });
   } catch (e) {
-    console.error("[obr-suite/portals] move updateItems failed", e);
+    console.error("[obr-suite/portals] move updateItems failed", { tokenIds, positions, error: e });
   }
 
   // Phase 2.25 — restore token visibility verbatim.
@@ -1437,14 +1505,35 @@ async function teleport(
   destPortalId: string,
   tokenIds: string[],
   instantCamera: boolean = false,
+  /** Entry portal id, threaded through the popover chain purely for
+   *  failure-log context. Optional — never blocks the teleport. */
+  entryId?: string,
 ) {
   if (tokenIds.length === 0) return;
   let dest: Item | null = null;
   try {
     const fetched = await OBR.scene.items.getItems([destPortalId]);
     if (fetched.length > 0) dest = fetched[0];
-  } catch {}
-  if (!dest) return;
+  } catch (e) {
+    console.error("[obr-suite/portals] teleport failed: destination fetch error", {
+      entryId: entryId ?? "unknown",
+      destPortalId,
+      tokenIds,
+      error: e,
+    });
+    // Return here — falling through to the !dest branch would log a
+    // second, FALSE cause ("portal missing" when it merely wasn't
+    // fetched) and mislead log triage.
+    return;
+  }
+  if (!dest) {
+    console.error("[obr-suite/portals] teleport failed: destination portal missing", {
+      entryId: entryId ?? "unknown",
+      destPortalId,
+      tokenIds,
+    });
+    return;
+  }
 
   let dpi = 150;
   try { dpi = await OBR.scene.grid.getDpi(); } catch {}
@@ -1490,6 +1579,18 @@ async function teleport(
     wallSegments,
   );
   if (!positions) {
+    console.error("[obr-suite/portals] teleport failed: no safe landing", {
+      entryId: entryId ?? "unknown",
+      destPortalId,
+      destCenter: center,
+      tokenIds,
+      tokenPositions: tokenIds.map((id) => {
+        const t = tokenById.get(id);
+        return { id, x: t?.position.x, y: t?.position.y };
+      }),
+      occupantCount: occupants.length,
+      wallSegmentCount: wallSegments.length,
+    });
     await notifyNoSafeLanding();
     return;
   }
@@ -1602,7 +1703,12 @@ async function migrateLegacyPortals(): Promise<void> {
 }
 
 export async function setupPortals(): Promise<void> {
-  try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
+  try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch (e) {
+    console.warn("[obr-suite/portals] getRole failed — assuming PLAYER", e);
+  }
+  try { myPlayerId = await OBR.player.getId(); } catch (e) {
+    console.error("[obr-suite/portals] getId failed — drag attribution disabled until player change", e);
+  }
 
   // Quietly normalise old portals (image.width/height = 96 from earlier
   // versions) to the current ICON_SIZE so OBR stops warning on every
@@ -1730,44 +1836,52 @@ export async function setupPortals(): Promise<void> {
     });
   }
 
+  // Coordinate baseline for drag detection — built BEFORE the
+  // items.onChange subscription below so the very first drag after
+  // scene load diffs against a real previous position (awaited: if the
+  // subscription registered first, a later-resolving baseline fetch
+  // could overwrite a fresher onChange position and fake a move).
+  if (await OBR.scene.isReady().catch(() => false)) {
+    await rebuildDragBaseline("setup");
+  }
+  // background.ts does NOT re-run module setup on scene switches
+  // (moduleStatus stays "on"), so the module re-baselines itself.
+  unsubs.push(
+    OBR.scene.onReadyChange((ready) => {
+      if (ready) {
+        void rebuildDragBaseline("scene-ready");
+      } else {
+        lastTokenPos.clear();
+        movedByMeIds.clear();
+        recentlyTeleported.clear();
+        if (dragEndTimer) {
+          clearTimeout(dragEndTimer);
+          dragEndTimer = null;
+        }
+      }
+    })
+  );
+
   // Selection watcher (DM): single-portal selection → edit popover.
   // Also dismisses the destination popover when the user clicks
   // somewhere else (selection changes), so the bubble doesn't linger
   // after the user has clearly moved on.
   //
-  // Pre-populates lastTokenPos for tokens that ENTER the selection.
-  // OBR's items.onChange appears to fire only once per drag (at the
-  // batched commit). Without a previous position recorded, the diff
-  // in onItemsMaybeDragging is `prev=undefined → no didMove → no
-  // dragEndTimer → no portal check`, and the user's first drag after
-  // a deselect+reselect is silently dropped — they have to drag a
-  // second time. Seeding the position at selection time gives the
-  // first drag a valid baseline.
+  // 2026-08-20 (checklist §3): this watcher NO LONGER seeds or prunes
+  // lastTokenPos. Baselines come from rebuildDragBaseline (scene
+  // start) and are maintained as a full-scene snapshot inside
+  // onItemsMaybeDragging. The old selection-time seeding awaited a
+  // getItems round-trip that raced the drag's own items.onChange, and
+  // its per-selection prune wiped baselines on every selection change
+  // — both were first-drag misses.
   let prevSelectionKey = "";
   unsubs.push(
     OBR.player.onChange(async (player) => {
+      if (player.id) myPlayerId = player.id;
       try {
         if (role === "GM") await handleDMSelectionForEdit(player.selection);
-      } catch {}
-      const sel = new Set(player.selection ?? []);
-      // Pre-populate lastTokenPos for newly-selected tokens.
-      const toPopulate: string[] = [];
-      for (const id of sel) {
-        if (!lastTokenPos.has(id)) toPopulate.push(id);
-      }
-      if (toPopulate.length > 0) {
-        try {
-          const items = await OBR.scene.items.getItems(toPopulate);
-          for (const it of items) {
-            if (it.layer !== "CHARACTER" && it.layer !== "MOUNT") continue;
-            if (isPortal(it)) continue;
-            lastTokenPos.set(it.id, { x: it.position.x, y: it.position.y });
-          }
-        } catch {}
-      }
-      // Drop entries for tokens no longer selected (memory cleanup).
-      for (const id of [...lastTokenPos.keys()]) {
-        if (!sel.has(id)) lastTokenPos.delete(id);
+      } catch (e) {
+        console.warn("[obr-suite/portals] DM selection edit handler failed", e);
       }
       const selKey = (player.selection ?? []).slice().sort().join(",");
       if (destPopoverOpen && selKey !== prevSelectionKey) {
@@ -1802,17 +1916,20 @@ export async function setupPortals(): Promise<void> {
   unsubs.push(
     OBR.broadcast.onMessage(BROADCAST_TELEPORT, async (msg) => {
       const data = msg.data as
-        | { destPortalId: string; tokenIds: string[] }
+        | { destPortalId: string; tokenIds: string[]; entryId?: string }
         | undefined;
       if (!data) return;
+      // entryId is log-context only — an older popover payload without
+      // it must never block the teleport.
+      const entryId = typeof data.entryId === "string" ? data.entryId : undefined;
       await closeDestinationPopover();
       if (readBlinkEnabled()) {
-        await openBlinkAndTeleport(data.destPortalId, data.tokenIds);
+        await openBlinkAndTeleport(data.destPortalId, data.tokenIds, entryId);
       } else {
         // Blink disabled — direct teleport with the smooth animateTo
         // camera move (instantCamera=false) so the user still sees a
         // brief pan to the destination instead of an abrupt snap.
-        await teleport(data.destPortalId, data.tokenIds, false);
+        await teleport(data.destPortalId, data.tokenIds, false, entryId);
       }
     })
   );
@@ -1835,7 +1952,7 @@ export async function setupPortals(): Promise<void> {
         return;
       }
       if (tJob) {
-        await teleport(tJob.destPortalId, tJob.tokenIds, true);
+        await teleport(tJob.destPortalId, tJob.tokenIds, true, tJob.entryId);
         // The teleport's own updateItems calls fire scene.items.onChange
         // → onItemsMaybeDragging → seeds movedByMeIds with the teleported
         // IDs (because lastModifiedUserId is this client). If we don't
@@ -2030,4 +2147,5 @@ export async function teardownPortals(): Promise<void> {
   pairFirst = null;
   lastTokenPos.clear();
   recentlyTeleported.clear();
+  myPlayerId = "";
 }

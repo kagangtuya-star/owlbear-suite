@@ -17,7 +17,7 @@
 // thing on / off. Modal lifecycle is driven by broadcasts the
 // palette + capture iframes send back here.
 
-import OBR from "@owlbear-rodeo/sdk";
+import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../asset-base";
 import { IS_MOBILE } from "../../feature-flags";
 import {
@@ -33,6 +33,7 @@ import {
   readTokenBuffIds,
   readTokenBuffRounds,
   sweepAllOurItems,
+  invalidateAllBuffCaches,
 } from "./bubbles";
 // getTokenCircleSpec is reused for invisible click hit-testing when a
 // palette status has been selected. The persistent local-Shape rings
@@ -342,7 +343,7 @@ async function toggleBuffOnToken(tokenId: string, buff: BuffDef): Promise<void> 
     });
     await refreshTokenBuffs(tokenId);
   } catch (e) {
-    console.warn("[status] toggleBuffOnToken failed", tokenId, e);
+    console.warn("[status] toggleBuffOnToken failed", { tokenId, buffId: buff.id, stage: "toggle", error: e });
   }
 }
 
@@ -356,7 +357,7 @@ async function clearAllBuffsOnToken(tokenId: string): Promise<void> {
     });
     await refreshTokenBuffs(tokenId);
   } catch (e) {
-    console.warn("[status] clearAllBuffsOnToken failed", tokenId, e);
+    console.warn("[status] clearAllBuffsOnToken failed", { tokenId, stage: "clear-all", error: e });
   }
 }
 
@@ -711,28 +712,66 @@ function displayBuffsWithRounds(token: any, buffs: BuffDef[]): BuffDef[] {
   });
 }
 
-async function syncAllVisibleTokensImpl(): Promise<void> {
+// === Per-token write serialization =========================================
+//
+// syncTokenBuffs deletes/adds bubble items with STABLE ids — two
+// concurrent runs for the same token produce duplicate addItems and
+// late-delete-kills-fresh-add interleavings. Every syncTokenBuffs call
+// (full pass AND single-token refresh) chains on the token's promise
+// tail so writes for one token are strictly sequential; different
+// tokens still run in parallel.
+const tokenSyncTails = new Map<string, Promise<boolean>>();
+/** Serialized syncTokenBuffs for one token. Returns the sync's success
+ *  flag — callers must not record the token as synced on false. */
+async function syncOneToken(token: any, buffs: BuffDef[]): Promise<boolean> {
+  const prev = tokenSyncTails.get(token.id) ?? Promise.resolve(true);
+  // .catch on the previous tail: one failed sync must not wedge the
+  // token's queue forever.
+  const next = prev.catch(() => false).then(() => syncTokenBuffs(token, buffs));
+  tokenSyncTails.set(token.id, next);
+  try {
+    return await next;
+  } finally {
+    if (tokenSyncTails.get(token.id) === next) tokenSyncTails.delete(token.id);
+  }
+}
+
+async function syncAllVisibleTokensImpl(itemsSnapshot?: Item[]): Promise<void> {
   if (!isGM) return;
   try {
-    const items = await OBR.scene.items.getItems();
+    // onChange delivers the complete scene — reuse it instead of
+    // re-fetching the whole scene per pass (checklist §1).
+    const items = itemsSnapshot ?? await OBR.scene.items.getItems();
     const next = new Map<string, string>();
+    // First pass: cheap key compare, collect what actually changed.
+    const cleanups: any[] = [];
+    const changed: Array<{ token: any; ids: string[] }> = [];
     for (const it of items) {
       if (!(it as any).image || (it as any).type !== "IMAGE") continue;
       const ids = readTokenBuffIds(it);
       if (ids.length === 0) {
-        if (lastBuffSnapshot.has(it.id)) {
-          await syncTokenBuffs(it as any, []);
-        }
+        if (lastBuffSnapshot.has(it.id)) cleanups.push(it);
         continue;
       }
       const key = tokenSyncKey(it, ids);
       next.set(it.id, key);
       if (lastBuffSnapshot.get(it.id) === key) continue;
-      const cat = await getCatalog();
+      changed.push({ token: it, ids });
+    }
+    // Catalog parse once per pass, not once per changed token.
+    const cat = changed.length > 0 ? await getCatalog() : [];
+    const byId = new Map(cat.map((b) => [b.id, b]));
+    for (const it of cleanups) {
+      await syncOneToken(it, []);
+    }
+    for (const { token, ids } of changed) {
       const buffs = ids
-        .map((id) => cat.find((b) => b.id === id))
+        .map((id) => byId.get(id))
         .filter((b): b is BuffDef => !!b);
-      await syncTokenBuffs(it as any, displayBuffsWithRounds(it, buffs));
+      const ok = await syncOneToken(token, displayBuffsWithRounds(token, buffs));
+      // Failed scene write: drop the key so the next pass retries this
+      // token instead of key-skipping it forever.
+      if (!ok) next.delete(token.id);
     }
     lastBuffSnapshot = next;
   } catch (e) {
@@ -756,24 +795,64 @@ async function syncAllVisibleTokensImpl(): Promise<void> {
 // pending one (we always sync against current scene state anyway).
 let syncRunning = false;
 let syncQueued = false;
-async function syncAllVisibleTokens(): Promise<void> {
+// Newest scene snapshot delivered by items.onChange — the queued
+// coalesced rerun reuses it instead of re-fetching the whole scene.
+let latestItemsSnapshot: Item[] | null = null;
+// Sticky full-resync request (catalog edit / render-mode flip). A bare
+// lastBuffSnapshot.clear() from those handlers can be LOST when a pass
+// is in flight: the pass ends with `lastBuffSnapshot = next`, replacing
+// the map that was just cleared, and the queued rerun then key-skips
+// everything. The flag is consumed at the START of the next impl run,
+// which is serialized, so the clear always lands on a fresh pass.
+let forceFullResync = false;
+
+// Exclusive gate shared by the sync pass AND sweepAllOurItems. Without
+// it a sweep's cache-invalidate can be undone by a concurrent pass
+// whose hydrate read raced the sweep's deleteItems: the pass would
+// repopulate the sig caches from pre-sweep scene state, the sweep then
+// deletes the real items, and every later pass diffs to zero ops —
+// bubbles permanently missing after a scene switch (checklist §1).
+let exclusiveChain: Promise<void> = Promise.resolve();
+function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const run = exclusiveChain.then(fn, fn);
+  exclusiveChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+/** sweepAllOurItems, serialized against the sync pass. Every sweep in
+ *  this module must go through here. */
+function sweepExclusive(): Promise<void> {
+  return runExclusive(() => sweepAllOurItems());
+}
+
+async function syncAllVisibleTokens(itemsSnapshot?: Item[]): Promise<void> {
   if (syncRunning) {
     syncQueued = true;
     return;
   }
   syncRunning = true;
   try {
-    await syncAllVisibleTokensImpl();
+    await runExclusive(() => {
+      if (forceFullResync) {
+        forceFullResync = false;
+        lastBuffSnapshot.clear();
+      }
+      return syncAllVisibleTokensImpl(itemsSnapshot);
+    });
   } finally {
     syncRunning = false;
     if (syncQueued) {
       syncQueued = false;
-      void syncAllVisibleTokens();
+      void syncAllVisibleTokens(latestItemsSnapshot ?? undefined);
     }
   }
 }
 
 async function refreshTokenBuffs(tokenId: string): Promise<void> {
+  // GM is the sole bubble-item writer (same gate as the full pass) —
+  // a player client running this raced the GM's writes with the same
+  // stable item ids. Player metadata writes replicate to the GM whose
+  // onChange pass renders them.
+  if (!isGM) return;
   try {
     const items = await OBR.scene.items.getItems([tokenId]);
     const token = items[0];
@@ -783,9 +862,14 @@ async function refreshTokenBuffs(tokenId: string): Promise<void> {
     const buffs = ids
       .map((id) => cat.find((b) => b.id === id))
       .filter((b): b is BuffDef => !!b);
-    await syncTokenBuffs(token as any, displayBuffsWithRounds(token, buffs));
+    const ok = await syncOneToken(token, displayBuffsWithRounds(token, buffs));
+    // Keep the full pass' cache honest so it doesn't redo this token —
+    // but only on success; a failed write must stay retryable.
+    if (!ok) lastBuffSnapshot.delete(tokenId);
+    else if (ids.length === 0) lastBuffSnapshot.delete(tokenId);
+    else lastBuffSnapshot.set(tokenId, tokenSyncKey(token, ids));
   } catch (e) {
-    console.warn("[status] refreshTokenBuffs failed", e);
+    console.warn("[status] refreshTokenBuffs failed", { tokenId, error: e });
   }
 }
 
@@ -802,6 +886,7 @@ let tickingBuffRounds = false;
 async function decrementBuffRounds(): Promise<void> {
   if (!isGM || tickingBuffRounds) return;
   tickingBuffRounds = true;
+  let tickTokenIds: string[] = [];
   try {
     const tokens = await OBR.scene.items.getItems((item) => {
       const ids = item.metadata?.[STATUS_BUFFS_KEY];
@@ -809,6 +894,7 @@ async function decrementBuffRounds(): Promise<void> {
       return Array.isArray(ids) && !!rounds && typeof rounds === "object";
     });
     if (tokens.length === 0) return;
+    tickTokenIds = tokens.map((t) => t.id);
     await OBR.scene.items.updateItems(tokens.map((t) => t.id), (drafts) => {
       for (const d of drafts) {
         const ids = readTokenBuffIds(d as any);
@@ -835,7 +921,7 @@ async function decrementBuffRounds(): Promise<void> {
       }
     });
   } catch (e) {
-    console.warn("[status] decrementBuffRounds failed", e);
+    console.warn("[status] decrementBuffRounds failed", { tokenIds: tickTokenIds, stage: "round-tick", error: e });
   } finally {
     tickingBuffRounds = false;
   }
@@ -1097,14 +1183,16 @@ export async function setupStatusTracker(): Promise<void> {
       }
       if (wasGM && !isGM) {
         // Demoted — drop everything we created. New GM will rebuild.
-        void sweepAllOurItems();
+        void sweepExclusive();
       }
     }),
   );
 
-  // Token-bubble sync.
-  unsubs.push(OBR.scene.items.onChange(() => {
-    void syncAllVisibleTokens();
+  // Token-bubble sync. onChange delivers the complete scene snapshot —
+  // hand it to the sync pass so it never re-reads the whole scene.
+  unsubs.push(OBR.scene.items.onChange((items) => {
+    latestItemsSnapshot = items;
+    void syncAllVisibleTokens(items);
   }));
   // Catalog edits live in localStorage now (per-client, not shared).
   // When the user edits a buff's colour/effect via the palette ✎
@@ -1129,13 +1217,14 @@ export async function setupStatusTracker(): Promise<void> {
   }));
   unsubs.push(
     OBR.broadcast.onMessage("com.obr-suite/status/catalog-changed", () => {
-      lastBuffSnapshot.clear();
+      // Sticky flag, not a bare clear() — see forceFullResync.
+      forceFullResync = true;
       void syncAllVisibleTokens();
     }),
   );
   const onLSChange = (e: StorageEvent): void => {
     if (e.key !== LS_BUFF_CATALOG_KEY) return;
-    lastBuffSnapshot.clear();
+    forceFullResync = true;
     void syncAllVisibleTokens();
   };
   window.addEventListener("storage", onLSChange);
@@ -1147,9 +1236,10 @@ export async function setupStatusTracker(): Promise<void> {
     }
     // Sweep first — clears any items left by an older renderer
     // (e.g. legacy rectangle-style bubbles) before we start drawing
-    // the new curved bands. Awaited so syncAllVisibleTokens can't
-    // race it.
-    await sweepAllOurItems();
+    // the new curved bands. Serialized under the exclusive gate so no
+    // onChange-driven pass can hydrate mid-sweep and repopulate the
+    // sig caches from pre-sweep scene state.
+    await sweepExclusive();
     lastBuffSnapshot.clear();
     void syncAllVisibleTokens();
   };
@@ -1159,7 +1249,14 @@ export async function setupStatusTracker(): Promise<void> {
   unsubs.push(
     OBR.scene.onReadyChange((ready) => {
       if (ready) void onSceneReady();
-      else lastBuffSnapshot.clear();
+      else {
+        lastBuffSnapshot.clear();
+        latestItemsSnapshot = null;
+        // Sig caches describe items of the scene we just LEFT — a
+        // stale hit here was the "return to a scene → bubbles never
+        // re-added" bug (checklist §1 scene-switch case).
+        invalidateAllBuffCaches();
+      }
     }),
   );
 }
@@ -1180,5 +1277,5 @@ export async function teardownStatusTracker(): Promise<void> {
   try { await closeCapture(); } catch {}
   try { await closeManagePopover(); } catch {}
   try { await closePalette(); } catch {}
-  await sweepAllOurItems();
+  await sweepExclusive();
 }

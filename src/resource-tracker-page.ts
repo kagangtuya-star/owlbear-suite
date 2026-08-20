@@ -28,6 +28,56 @@ import {
   RESOURCES_KEY,
 } from "./modules/resourceTracker/types";
 import { writeResources, readResources } from "./modules/resourceTracker/storage";
+import { isDegenerateResourceId, stableResourceId } from "./modules/resourceTracker/id";
+
+/** Merge preset resources into a token's current array without letting
+ *  id collisions cross-link rows (checklist §2): a preset entry whose
+ *  id is degenerate, or already taken by a DIFFERENT-named resource on
+ *  the token, falls back to NAME matching (occurrence-aware) against
+ *  the token's rows — only when no same-named row exists is it inserted
+ *  under a fresh deterministic id. Idempotent: re-applying the same
+ *  preset never grows the array (the old degenerate-id fallthrough
+ *  pushed a new copy on EVERY apply). */
+function mergePresetResources(cur: Resource[], preset: Resource[]): Resource[] {
+  const next = cur.map((r) => ({ ...r }));
+  const byId = new Map(next.map((r) => [r.id, r]));
+  const usedIds = new Set(next.map((r) => r.id));
+  const byNameQueue = new Map<string, Resource[]>();
+  for (const r of next) {
+    const list = byNameQueue.get(r.name) ?? [];
+    list.push(r);
+    byNameQueue.set(r.name, list);
+  }
+  const nameConsumed = new Map<string, number>();
+  for (const r of preset) {
+    const clash = byId.get(r.id);
+    if (clash && clash.name === r.name) continue; // already present — keep live state
+    if (!clash && !isDegenerateResourceId(r.id)) {
+      // Trustworthy unique id not on the token — plain insert.
+      next.push({ ...r });
+      byId.set(r.id, next[next.length - 1]);
+      usedIds.add(r.id);
+      continue;
+    }
+    // Untrustworthy id (degenerate, or taken by a different-named
+    // row): match by name + occurrence. A same-named row already on
+    // the token — including one pushed by a PREVIOUS apply of this
+    // preset — absorbs the entry (keep live state, no insert).
+    const queue = byNameQueue.get(r.name) ?? [];
+    const idx = nameConsumed.get(r.name) ?? 0;
+    nameConsumed.set(r.name, idx + 1);
+    if (idx < queue.length) continue;
+    const reid = { ...r, id: stableResourceId(r.name, usedIds) };
+    console.info("[obr-suite/resources] preset entry re-id'd to avoid collision", {
+      name: r.name, oldId: r.id, newId: reid.id,
+    });
+    next.push(reid);
+    byId.set(reid.id, reid);
+    queue.push(reid);
+    byNameQueue.set(r.name, queue);
+  }
+  return next;
+}
 import { applyI18nDom, t } from "./i18n";
 import { getLocalLang, onLangChange } from "./state";
 
@@ -490,13 +540,7 @@ async function applyPresetToAll(preset: ResourcePreset, mode: "overwrite" | "mer
     const cur = readResources(item);
     const next = mode === "overwrite"
       ? preset.resources.map((r) => ({ ...r }))
-      : (() => {
-          const byId = new Map(cur.map((r) => [r.id, r]));
-          for (const r of preset.resources) {
-            if (!byId.has(r.id)) byId.set(r.id, { ...r });
-          }
-          return [...byId.values()];
-        })();
+      : mergePresetResources(cur, preset.resources);
     try { await writeResources(tid, next); n++; } catch {}
   }
   return n;
@@ -512,11 +556,7 @@ async function applyPresetToToken(preset: ResourcePreset, tokenId: string): Prom
   // Drop-on-card is always MERGE — overwriting a single character via
   // drag would be too surprising. "覆盖" lives in the click-menu only.
   const cur = readResources(item);
-  const byId = new Map(cur.map((r) => [r.id, r]));
-  for (const r of preset.resources) {
-    if (!byId.has(r.id)) byId.set(r.id, { ...r });
-  }
-  try { await writeResources(tokenId, [...byId.values()]); } catch {}
+  try { await writeResources(tokenId, mergePresetResources(cur, preset.resources)); } catch {}
   try {
     await OBR.notification.show(
       T("rtPresetMergedTo")

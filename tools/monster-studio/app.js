@@ -548,6 +548,17 @@ function sampleDoc() {
             },
             ability: "int",
           },
+          // displayAs 演示 — 该条目会渲染进「附赠动作」区域，
+          // 演示三条渲染链共享的 displayAs 路由。
+          {
+            ENG_name: "Bonus Action Casting",
+            name: "附赠动作施法",
+            type: "spellcasting",
+            displayAs: "bonus",
+            headerEntries: ["巫妖能以一个附赠动作施放下列法术之一："],
+            will: ["{@spell 迷踪步}"],
+            ability: "int",
+          },
         ] : [
           {
             ENG_name: "Spellcasting",
@@ -568,6 +579,17 @@ function sampleDoc() {
               "8": { slots: 1, spells: ["{@spell dominate monster}", "{@spell power word stun}"] },
               "9": { slots: 1, spells: ["{@spell power word kill}"] },
             },
+            ability: "int",
+          },
+          // displayAs demo — this entry renders inside Bonus Actions,
+          // exercising the routing the suite's renderers share.
+          {
+            ENG_name: "Bonus Action Casting",
+            name: "Bonus Action Casting",
+            type: "spellcasting",
+            displayAs: "bonus",
+            headerEntries: ["The lich casts one of the following spells as a bonus action:"],
+            will: ["{@spell misty step}"],
             ability: "int",
           },
         ],

@@ -13,6 +13,7 @@ import { PANEL_IDS } from "../../utils/panelLayout";
 import {
   DEFAULT_TRANSFORM_POLICY,
   TRANSFORM_POLICY_KEY,
+  TRANSFORM_STACK_KEY,
   normalizeTransformHpMode,
   normalizeTransformPolicy,
   transformPolicyAllowsMonster,
@@ -289,6 +290,7 @@ function App() {
   const [transformPolicy, setTransformPolicy] = useState<TransformPolicy>(() => ({
     ...DEFAULT_TRANSFORM_POLICY,
   }));
+  const [transformBlocked, setTransformBlocked] = useState(false);
   const [transformAccess, setTransformAccess] = useState<"loading" | "allowed" | "denied">(
     TRANSFORM_TARGET_ITEM_ID ? "loading" : "allowed",
   );
@@ -337,10 +339,16 @@ function App() {
         const item = items[0] as any;
         const policy = normalizeTransformPolicy(item?.metadata?.[TRANSFORM_POLICY_KEY]);
         const owns = !!(nextPlayerId && item?.createdUserId === nextPlayerId);
+        // Nested transforms are forbidden — a stale picker left open
+        // while another client transformed this token must refuse
+        // (live-refreshed via the items.onChange subscription below).
+        const stack = item?.metadata?.[TRANSFORM_STACK_KEY];
+        const alreadyTransformed = Array.isArray(stack) && stack.length > 0;
         setRole(nextRole as "GM" | "PLAYER");
         setPlayerId(nextPlayerId);
         setTransformPolicy(policy);
         setTransformTargetName(String(item?.name ?? ""));
+        setTransformBlocked(alreadyTransformed);
         setTransformAccess(nextRole === "GM" || (owns && policy.enabled) ? "allowed" : "denied");
       } catch (e) {
         console.warn("[bestiary] transform access refresh failed", e);
@@ -561,6 +569,16 @@ function App() {
       // transform module (it snapshots the token, swaps, and closes
       // this picker). It also receives bestiary slug + HP/AC metadata
       // so the transformed token is bound like a spawned monster.
+      if (transformBlocked) {
+        console.warn("[bestiary] transform pick refused: token already transformed", { itemId: TRANSFORM_TARGET_ITEM_ID });
+        try {
+          await OBR.notification.show(
+            lang === "zh" ? "该 token 已处于变身状态，请先解除变身" : "This token is already transformed — revert it first",
+            "WARNING",
+          );
+        } catch {}
+        return;
+      }
       if (role !== "GM" && !transformPolicyAllowsMonster(transformPolicy, mon)) {
         try {
           await OBR.notification.show(
@@ -612,7 +630,7 @@ function App() {
     } else {
       await spawnMonster(mon);
     }
-  }, [role, transformPolicy, transformHpMode, lang]);
+  }, [role, transformPolicy, transformHpMode, lang, transformBlocked]);
 
   // Drag-spawn DROP handler. The monster-drag-preview modal broadcasts
   // BC_MONSTER_DROP with the slug + scene-coord drop position; we
@@ -710,6 +728,22 @@ function App() {
           {lang === "zh"
             ? "这个 token 尚未为你开启变身权限。"
             : "Transform permission has not been enabled for you on this token."}
+        </div>
+      </div>
+    );
+  }
+
+  // Players get a hard block; the GM keeps the full picker so the
+  // transform-POLICY editor (only reachable through this modal) stays
+  // usable while a player transform is active — actually PICKING a
+  // monster is still refused in handleSpawn + the background guards.
+  if (TRANSFORM_TARGET_ITEM_ID && transformBlocked && role !== "GM") {
+    return (
+      <div class="app">
+        <div class="empty">
+          {lang === "zh"
+            ? "该 token 已处于变身状态，请先解除变身。"
+            : "This token is already transformed — revert it first."}
         </div>
       </div>
     );

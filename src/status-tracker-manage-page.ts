@@ -18,7 +18,7 @@
 // Refreshes when scene metadata or the token's items list change
 // so the popover stays in sync with concurrent edits.
 
-import OBR from "@owlbear-rodeo/sdk";
+import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import {
   PLUGIN_ID,
   STATUS_BUFFS_KEY,
@@ -121,16 +121,19 @@ async function loadCatalog(): Promise<void> {
   catalog = [...byId.values()];
 }
 
-async function loadTokenState(): Promise<void> {
+/** Rebuild this popover's token state. When items.onChange already
+ *  delivered the scene snapshot, pass it in — no extra getItems. */
+async function loadTokenState(itemsSnapshot?: Item[]): Promise<void> {
   if (!tokenId) return;
   try {
-    const items = await OBR.scene.items.getItems([tokenId]);
-    if (items.length === 0) {
+    const tok = itemsSnapshot
+      ? itemsSnapshot.find((it) => it.id === tokenId)
+      : (await OBR.scene.items.getItems([tokenId]))[0];
+    if (!tok) {
       myBuffIds = [];
       tokenName = T("stRoleFallback");
       return;
     }
-    const tok = items[0];
     tokenName = tok.name || T("stRoleFallback");
     const ids = (tok.metadata as any)[STATUS_BUFFS_KEY];
     myBuffIds = Array.isArray(ids) ? ids.filter((x: any) => typeof x === "string") : [];
@@ -142,7 +145,8 @@ async function loadTokenState(): Promise<void> {
         if (Number.isFinite(n) && n > 0) myBuffRounds[id] = n;
       }
     }
-  } catch {
+  } catch (e) {
+    console.warn("[status/manage] loadTokenState failed", { tokenId, error: e });
     myBuffIds = [];
     myBuffRounds = {};
   }
@@ -249,30 +253,24 @@ OBR.onReady(async () => {
       console.warn("[status/manage] scene metadata handler failed", e);
     }
   });
-  // Re-render when the token's buff list changes — including
-  // changes WE just made via a manage-transfer drag (the capture
-  // overlay's metadata write triggers items.onChange here too).
-  OBR.scene.items.onChange(async () => {
-    try {
-      await loadTokenState();
-      render();
-    } catch (e) {
-      console.warn("[status/manage] scene items handler failed", e);
-    }
-  });
-
-  // If the token disappears from the scene (deleted while the
-  // popover is open), close ourselves rather than showing stale
-  // data forever.
+  // Single items.onChange: the delivered snapshot both answers "is
+  // the token still there" and carries its metadata — the old pair of
+  // handlers discarded the payload and re-fetched getItems([tokenId])
+  // on every scene tick (checklist §1).
   OBR.scene.items.onChange(async (items) => {
     try {
       if (!tokenId) return;
       const stillThere = items.some((it) => it.id === tokenId);
       if (!stillThere) {
+        // Token deleted while the popover is open — close rather than
+        // show stale data forever.
         try { await OBR.popover.close(POPOVER_ID); } catch {}
+        return;
       }
+      await loadTokenState(items);
+      render();
     } catch (e) {
-      console.warn("[status/manage] token disappearance handler failed", e);
+      console.warn("[status/manage] scene items handler failed", { tokenId, error: e });
     }
   });
 });
