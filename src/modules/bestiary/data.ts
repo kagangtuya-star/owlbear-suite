@@ -80,9 +80,10 @@ function getUnionDisabledSources(): Set<string> {
     return new Set<string>();
   }
 }
-// Images: proxied through our own server so OBR can load them as WebGL textures
-// (5e.tools doesn't send CORS headers, so direct loading fails in scene rendering).
-const IMG_BASE = "https://obr.dnd.center/5etools-img";
+// Images: use the same CORS-enabled kiwee mirror as the default data source.
+// Do not route these through 5e.tools: its Cloudflare challenge can return
+// cacheable HTML/403 responses instead of image bytes to our reverse proxy.
+const IMG_BASE = "https://5e.kiwee.top/img";
 
 const SIZE_MAP: Record<string, string> = {
   T: "超小型", S: "小型", M: "中型", L: "大型", H: "巨型", G: "超巨型",
