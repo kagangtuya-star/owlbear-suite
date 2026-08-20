@@ -28,7 +28,6 @@ import { setupCrossSceneCards } from "./modules/cross-scene-cards";
 import { setupPerfWindow } from "./modules/perfWindow";
 import { assetUrl } from "./asset-base";
 import { onViewportResize } from "./utils/viewportAnchor";
-import { STABLE_HIDES } from "./feature-flags";
 import {
   PANEL_IDS,
   getPanelOffset,
@@ -46,6 +45,10 @@ import {
   LAYOUT_EDITOR_MODAL_ID,
   type DragEndPayload,
 } from "./utils/panelLayout";
+import {
+  refreshStaleSubscriptions,
+  BC_LOCAL_CONTENT_CHANGED,
+} from "./utils/localContent";
 
 // Helper used everywhere a popover opens with a side-aware drag handle.
 // Computes which half of the viewport the panel center sits in and
@@ -157,31 +160,6 @@ const IS_MOBILE = isMobileDevice();
 //   • 全局搜索 / Global Search           (popover not registered)
 const BC_MOBILE_PRESENCE = "com.obr-suite/mobile-presence";
 const seenMobilePlayers = new Set<string>();
-const ANNOUNCEMENT_MODAL_ID = "com.obr-suite/dm-announcement";
-const LS_ANNOUNCEMENT_AUTO_DATE = "obr-suite/announcement-auto-date";
-
-function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-async function openDailyAnnouncement(): Promise<void> {
-  const today = todayKey();
-  try {
-    if (localStorage.getItem(LS_ANNOUNCEMENT_AUTO_DATE) === today) return;
-    localStorage.setItem(LS_ANNOUNCEMENT_AUTO_DATE, today);
-  } catch {}
-  try {
-    await OBR.modal.open({
-      id: ANNOUNCEMENT_MODAL_ID,
-      url: assetUrl("dm-announcement.html?auto=1"),
-      width: 560,
-      height: 580,
-    });
-  } catch (e) {
-    console.warn("[obr-suite] daily announcement open failed", e);
-  }
-}
-
 function disabledFeaturesText(lang: "zh" | "en"): string {
   return lang === "zh"
     ? "角色卡全屏面板、全局搜索、状态追踪、元数据检查"
@@ -618,24 +596,24 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
   // runs and no popover / audio engine / PeerJS pairing starts. The
   // web tool at obr.dnd.center/studio/music-studio/ still works
   // standalone; the settings page links there.
-  // fullFog stays dev-only — door / window cutting still in design.
-  ...(STABLE_HIDES
-    ? {}
-    : {
-        fullFog: {
-          setup: async () => { await setupFullFog(); },
-          teardown: async () => { await teardownFullFog(); },
-        },
-        // 2026-05-14 — `follow` removed here per user request.
-        // Transform (变身) — dev-only scaffold (2026-05-20). Right-click
-        // context menu + snapshot/revert + ad-hoc image swap working;
-        // preset forms + two-stage effects + bestiary + camera focus
-        // still to come. Promote out of this gate once it's complete.
-        transform: {
-          setup: async () => { await setupTransform(); },
-          teardown: async () => { teardownTransform(); },
-        },
-      }),
+  // 2026-05-26 — fullFog promoted to stable. The setupFullFog() body
+  // itself gates the light + dev-door-tool subsystems behind
+  // !STABLE_HIDES so only the "edit map fog" context menu ships to
+  // stable (matches user request: keep map-fog editor only, drop
+  // light + the old door/window tool modes). The new in-editor door
+  // tool replaces the latter.
+  fullFog: {
+    setup: async () => { await setupFullFog(); },
+    teardown: async () => { await teardownFullFog(); },
+  },
+  // Transform (变身) — stable: right-click CHARACTER token, pick a
+  // bestiary form, swap image + bestiary/bubbles metadata, and revert
+  // from the transform stack. DM can configure per-token owner limits
+  // in the picker header.
+  transform: {
+    setup: async () => { await setupTransform(); },
+    teardown: async () => { teardownTransform(); },
+  },
 };
 
 // Module lifecycle states: "off" (not running), "starting" (setup in
@@ -719,6 +697,33 @@ OBR.onReady(async () => {
   // we always run it; it's a no-op when the user hasn't enabled it.
   void setupPerfWindow();
 
+  // URL-subscribed homebrew packs — re-fetch every stale subscription
+  // (lastFetchedAt older than SUB_STALE_MS) so updates the upstream
+  // author published since last session appear automatically.
+  // Non-blocking: fetches run in the background; the suite continues
+  // to use the previously-cached content until each refresh lands,
+  // then broadcasts BC_LOCAL_CONTENT_CHANGED so search / bestiary
+  // pick up the new data without a page reload.
+  void (async () => {
+    try {
+      const { refreshed, failed } = await refreshStaleSubscriptions();
+      if (refreshed > 0) {
+        try {
+          await OBR.broadcast.sendMessage(
+            BC_LOCAL_CONTENT_CHANGED,
+            { source: "subscription-refresh" },
+            { destination: "LOCAL" },
+          );
+        } catch {}
+      }
+      if (failed > 0) {
+        console.warn(`[obr-suite/background] subscription refresh: ${refreshed} ok, ${failed} failed (check Settings → 库设置 for details)`);
+      }
+    } catch (e) {
+      console.warn("[obr-suite/background] subscription auto-refresh failed", e);
+    }
+  })();
+
   // (resourceTracker is now wired through the module registry above —
   // its enable flag lives in state.enabled.resourceTracker and is
   // toggled in Settings → 资源追踪.)
@@ -734,9 +739,8 @@ OBR.onReady(async () => {
         changedEnabledIds();
         await syncModules();
         void announceMobilePresence();
-        void openDailyAnnouncement();
-        // (Auto-show removed — the cluster's megaphone button drives
-      // the announcement modal now; see cluster.ts.)
+        // Announcement no longer opens automatically; the cluster-row
+        // megaphone button remains the manual entry point.
       } else {
         await closeCluster();
       }
@@ -748,9 +752,8 @@ OBR.onReady(async () => {
       await openCluster();
       await syncModules();
       void announceMobilePresence();
-      void openDailyAnnouncement();
-      // (Auto-show removed — the cluster's megaphone button drives
-      // the announcement modal now; see cluster.ts.)
+      // Announcement no longer opens automatically; the cluster-row
+      // megaphone button remains the manual entry point.
     } else {
       await closeCluster();
     }

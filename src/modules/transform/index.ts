@@ -7,10 +7,8 @@
  *   1. Snapshot the token's current {image, grid, scale, name, text,
  *      bestiary-slug} and PUSH it onto a transform stack stored in the
  *      token's own metadata (com.obr-suite/transform:stack).
- *   2. (Phase 2) play the stage-1 effect.
- *   3. At the midpoint, swap image / grid / scale / name to the new
- *      form. (Phase 2 also swaps bestiary data + bubbles HP/AC.)
- *   4. (Phase 2) play the stage-2 effect.
+ *   2. Swap image / grid / scale / name to the new form and bind its
+ *      bestiary data + bubbles HP/AC metadata.
  *
  * "解除变身" pops the top snapshot and restores it — so nested
  * transforms (A → B → revert → A → revert → original) work.
@@ -25,8 +23,16 @@ import OBR, { buildImage } from "@owlbear-rodeo/sdk";
 import type { Image, Item } from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../asset-base";
 import { getLocalLang } from "../../state";
+import {
+  TRANSFORM_POLICY_KEY,
+  TRANSFORM_STACK_KEY,
+  normalizeTransformHpMode,
+  normalizeTransformPolicy,
+  transformPolicyAllowsMonster,
+  type TransformHpMode,
+} from "./shared";
 
-// Dev-only module; per-client language read once at init (context menus
+// Per-client language read once at init (context menus
 // register at boot, so a live re-render isn't needed).
 const en = getLocalLang() === "en";
 
@@ -42,14 +48,20 @@ const PAGE_URL = assetUrl("transform.html");
 // The transform stack: an ARRAY of snapshots on the token's metadata.
 // Top of stack = the form most recently applied. Empty / absent =
 // the token is in its original (un-transformed) state.
-const META_STACK = "com.obr-suite/transform:stack";
+const META_STACK = TRANSFORM_STACK_KEY;
+const META_POLICY = TRANSFORM_POLICY_KEY;
 // Reused from the bestiary module — swapping a form may also point the
 // token at a monster stat-block. The dev plugin does NOT rewrite
 // "com.bestiary/" (only "com.obr-suite/"), so this key is shared
 // dev↔stable, exactly like the bestiary module's own usage.
 const BESTIARY_SLUG_KEY = "com.bestiary/slug";
+const BUBBLES_META = "com.obr-suite/bubbles/data";
+const BUBBLES_NAME = "com.owlbear-rodeo-bubbles-extension/name";
+const INITIATIVE_MODKEY = "com.initiative-tracker/dexMod";
+const CC_BIND_KEY = "com.character-cards/boundCardId";
 
 const CTX_TRANSFORM = "com.obr-suite/transform/ctx-transform";
+const CTX_TRANSFORM_PLAYER = "com.obr-suite/transform/ctx-transform-player";
 const CTX_REVERT = "com.obr-suite/transform/ctx-revert";
 
 // Popover → background: "apply this form to this token".
@@ -68,15 +80,21 @@ const ICON_URL = assetUrl("transform-icon.svg");
 // ---- Form + snapshot shapes ----------------------------------------
 
 /** A form the user wants to morph INTO. Built by the picker popover
- *  (ad-hoc: pasted image URL + size; Phase 2: preset library entries
- *  carry effect ids + bestiary slug too). */
+ *  (bestiary picker entries carry image URL + size + stat metadata). */
 export interface TransformForm {
   image: { url: string; width: number; height: number; mime: string };
   /** Grid-cell footprint (1 = Medium, 2 = Large, …). Maps to scale. */
   footprint: number;
   name: string;
-  /** Optional bestiary slug to bind on top of the new form (Phase 2). */
+  /** Optional bestiary slug to bind on top of the new form. */
   bestiarySlug?: string | null;
+  hp?: number;
+  ac?: number;
+  dexMod?: number;
+  /** monster = use bestiary HP while transformed; card = preserve CC HP if bound. */
+  hpMode?: TransformHpMode;
+  type?: string;
+  cr?: string;
   /** Human label for the "解除变身 → back to <label>" affordance. */
   label?: string;
 }
@@ -90,10 +108,13 @@ interface TransformSnapshot {
   name: string;
   /** OBR-native plainText label (token name text), if any. */
   text: any | null;
-  /** com.bestiary/slug at snapshot time (null if unbound). */
-  bestiarySlug: string | null;
+  /** Metadata values restored on revert. New snapshots use metadata;
+   *  bestiarySlug is kept for old stacks already written by dev builds. */
+  metadata?: Record<string, unknown>;
+  bestiarySlug?: string | null;
   /** Label of the form that was applied on top of this snapshot. */
   appliedLabel?: string;
+  appliedHpMode?: TransformHpMode;
   ts: number;
 }
 
@@ -120,6 +141,73 @@ function readStack(item: Item): TransformSnapshot[] {
   return Array.isArray(raw) ? (raw as TransformSnapshot[]) : [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasCharacterCardBinding(meta: Record<string, unknown>): boolean {
+  const cardId = meta[CC_BIND_KEY];
+  return typeof cardId === "string" && cardId.trim().length > 0;
+}
+
+function buildTransformBubblesMeta(
+  meta: Record<string, unknown>,
+  form: TransformForm,
+): Record<string, unknown> | null {
+  const next = isRecord(meta[BUBBLES_META]) ? { ...meta[BUBBLES_META] } : {};
+  const hpMode = normalizeTransformHpMode(form.hpMode);
+  const keepCharacterHp = hpMode === "card" && hasCharacterCardBinding(meta);
+  let touched = false;
+
+  if (!keepCharacterHp && typeof form.hp === "number") {
+    next.health = form.hp;
+    next["max health"] = form.hp;
+    next["temporary health"] = 0;
+    touched = true;
+  }
+  if (typeof form.ac === "number") {
+    next["armor class"] = form.ac;
+    touched = true;
+  }
+
+  if (!touched && Object.keys(next).length === 0) return null;
+  if (!("hide" in next)) next.hide = false;
+  if (!("locked" in next)) next.locked = true;
+  return next;
+}
+
+const SNAPSHOT_METADATA_KEYS = [
+  BESTIARY_SLUG_KEY,
+  BUBBLES_META,
+  BUBBLES_NAME,
+  INITIATIVE_MODKEY,
+] as const;
+
+function snapshotMetadata(meta: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!meta) return out;
+  for (const key of SNAPSHOT_METADATA_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(meta, key)) {
+      out[key] = meta[key];
+    }
+  }
+  return out;
+}
+
+function restoreSnapshotMetadata(meta: Record<string, unknown>, snap: TransformSnapshot): void {
+  for (const key of SNAPSHOT_METADATA_KEYS) delete meta[key];
+  if (snap.metadata) {
+    for (const [key, value] of Object.entries(snap.metadata)) {
+      meta[key] = value;
+    }
+    return;
+  }
+
+  // Backwards compatibility for stacks written before this module also
+  // snapshotted bubbles / initiative metadata.
+  if (snap.bestiarySlug) meta[BESTIARY_SLUG_KEY] = snap.bestiarySlug;
+}
+
 function mimeFromUrl(url: string): string {
   const u = url.split("?")[0].toLowerCase();
   if (u.endsWith(".png")) return "image/png";
@@ -130,11 +218,25 @@ function mimeFromUrl(url: string): string {
   return "image/png";
 }
 
+async function canUsePickedMonster(itemId: string, pick: { type?: unknown; cr?: unknown }): Promise<boolean> {
+  let item: Item | undefined;
+  try {
+    const arr = await OBR.scene.items.getItems([itemId]);
+    item = arr[0];
+  } catch {
+    return false;
+  }
+  if (!isImage(item) || !canControl(item)) return false;
+  if (myRole === "GM") return true;
+  const policy = normalizeTransformPolicy((item.metadata as any)?.[META_POLICY]);
+  return transformPolicyAllowsMonster(policy, pick);
+}
+
 // ---- core engine ----------------------------------------------------
 
 /** Snapshot the token's current visual state, push it on the stack,
  *  and swap to the new form. Image/grid/scale/name change for everyone
- *  (real item mutation). Effects + bestiary binding land in Phase 2. */
+ *  (real item mutation) and bestiary / HP metadata change with it. */
 async function applyTransform(itemId: string, form: TransformForm): Promise<void> {
   let item: Item | undefined;
   try {
@@ -149,7 +251,6 @@ async function applyTransform(itemId: string, form: TransformForm): Promise<void
     try { await OBR.notification.show(en ? "You don't have permission to transform this token" : "你没有权限变身这个 token", "WARNING"); } catch {}
     return;
   }
-
   // Build the snapshot from the LIVE item before we mutate it.
   const img = item.image;
   const snap: TransformSnapshot = {
@@ -166,11 +267,13 @@ async function applyTransform(itemId: string, form: TransformForm): Promise<void
     scale: { x: item.scale.x, y: item.scale.y },
     name: item.name,
     text: (item as any).text ?? null,
+    metadata: snapshotMetadata(item.metadata as Record<string, unknown> | undefined),
     bestiarySlug:
       typeof (item.metadata as any)?.[BESTIARY_SLUG_KEY] === "string"
         ? ((item.metadata as any)[BESTIARY_SLUG_KEY] as string)
         : null,
     appliedLabel: form.label ?? form.name,
+    appliedHpMode: normalizeTransformHpMode(form.hpMode),
     ts: Date.now(),
   };
 
@@ -203,6 +306,17 @@ async function applyTransform(itemId: string, form: TransformForm): Promise<void
         const anyD = d as any;
         if (anyD.text && typeof anyD.text === "object") {
           anyD.text = { ...anyD.text, plainText: form.name };
+        }
+        if (typeof form.bestiarySlug === "string" && form.bestiarySlug) {
+          d.metadata[BESTIARY_SLUG_KEY] = form.bestiarySlug;
+        }
+        const bubbles = buildTransformBubblesMeta(d.metadata as Record<string, unknown>, form);
+        if (bubbles) {
+          d.metadata[BUBBLES_META] = bubbles;
+          d.metadata[BUBBLES_NAME] = form.name;
+        }
+        if (typeof form.dexMod === "number") {
+          d.metadata[INITIATIVE_MODKEY] = form.dexMod;
         }
       }
     });
@@ -246,12 +360,7 @@ async function revertTransform(itemId: string): Promise<void> {
         d.name = snap.name;
         const anyD = d as any;
         if (snap.text) anyD.text = snap.text;
-        // Restore (or clear) the bestiary slug to match the snapshot.
-        if (snap.bestiarySlug) {
-          (d.metadata as any)[BESTIARY_SLUG_KEY] = snap.bestiarySlug;
-        } else {
-          delete (d.metadata as any)[BESTIARY_SLUG_KEY];
-        }
+        restoreSnapshotMetadata(d.metadata as Record<string, unknown>, snap);
       }
     });
   } catch (e) {
@@ -309,9 +418,17 @@ export async function setupTransform(): Promise<void> {
   try { myRole = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
   try { myId = await OBR.player.getId(); } catch {}
 
-  // "变身" — visible on any single CHARACTER image. Ownership is
-  // re-checked in the handler (OBR filters can't express
-  // createdUserId === self).
+  try {
+    const u = OBR.player.onChange((player) => {
+      const nextRole = (player.role as "GM" | "PLAYER") || myRole;
+      if (nextRole) myRole = nextRole;
+      if (player.id) myId = player.id;
+    });
+    if (typeof u === "function") unsubs.push(u);
+  } catch {}
+
+  // DM "变身" — always visible on one CHARACTER token. The picker
+  // header lets the DM configure what the token owner may use later.
   try {
     await OBR.contextMenu.create({
       id: CTX_TRANSFORM,
@@ -320,6 +437,7 @@ export async function setupTransform(): Promise<void> {
           icon: ICON_URL,
           label: en ? "Transform" : "变身",
           filter: {
+            roles: ["GM"],
             every: [
               { key: "type", value: "IMAGE" },
               { key: "layer", value: "CHARACTER" },
@@ -331,15 +449,55 @@ export async function setupTransform(): Promise<void> {
       onClick: (ctx) => {
         const id = ctx.items[0]?.id;
         if (!id) return;
-        if (!canControl(ctx.items[0] as Item)) {
-          void OBR.notification.show(en ? "You can only transform your own tokens" : "只能变身你自己的 token", "WARNING");
+        void openMonsterPicker(id);
+      },
+    });
+  } catch (e) {
+    console.warn("[transform] create CTX_TRANSFORM failed", e);
+  }
+
+  // Player "变身" — only appears for token owners when the DM has
+  // explicitly enabled a per-token policy. The handler re-checks both
+  // ownership and policy, because context-menu filters can't express
+  // createdUserId === current player.
+  try {
+    await OBR.contextMenu.create({
+      id: CTX_TRANSFORM_PLAYER,
+      icons: [
+        {
+          icon: ICON_URL,
+          label: en ? "Transform" : "变身",
+          filter: {
+            roles: ["PLAYER"],
+            permissions: ["UPDATE"],
+            every: [
+              { key: "type", value: "IMAGE" },
+              { key: "layer", value: "CHARACTER" },
+              { key: ["metadata", META_POLICY, "enabled"], value: true },
+            ],
+            max: 1,
+          },
+        },
+      ],
+      onClick: (ctx) => {
+        const item = ctx.items[0] as Item | undefined;
+        const id = item?.id;
+        if (!id) return;
+        const policy = normalizeTransformPolicy((item.metadata as any)?.[META_POLICY]);
+        if (!canControl(item) || !policy.enabled) {
+          void OBR.notification.show(
+            en
+              ? "This token has no transform permission configured for you"
+              : "这个 token 还没有为你开启变身权限",
+            "WARNING",
+          );
           return;
         }
         void openMonsterPicker(id);
       },
     });
   } catch (e) {
-    console.warn("[transform] create CTX_TRANSFORM failed", e);
+    console.warn("[transform] create CTX_TRANSFORM_PLAYER failed", e);
   }
 
   // "解除变身" — only on tokens that actually have a transform stack.
@@ -351,8 +509,10 @@ export async function setupTransform(): Promise<void> {
           icon: ICON_URL,
           label: en ? "Revert" : "解除变身",
           filter: {
+            permissions: ["UPDATE"],
             every: [
               { key: "type", value: "IMAGE" },
+              { key: "layer", value: "CHARACTER" },
               { key: ["metadata", META_STACK], operator: "!=", value: undefined },
             ],
             max: 1,
@@ -378,9 +538,30 @@ export async function setupTransform(): Promise<void> {
   try {
     const u = OBR.broadcast.onMessage(BC_TRANSFORM_PICK, async (event) => {
       const data = event.data as {
-        itemId?: string; tokenUrl?: string; size?: string; name?: string;
+        itemId?: string;
+        tokenUrl?: string;
+        size?: string;
+        name?: string;
+        bestiarySlug?: string;
+        hp?: number;
+        ac?: number;
+        dexMod?: number;
+        hpMode?: TransformHpMode;
+        type?: string;
+        cr?: string;
       } | undefined;
       if (!data?.itemId || !data.tokenUrl) return;
+      if (!(await canUsePickedMonster(data.itemId, data))) {
+        try {
+          await OBR.notification.show(
+            en
+              ? "That form is outside this token's transform permission"
+              : "该形态不在这个 token 的变身授权范围内",
+            "WARNING",
+          );
+        } catch {}
+        return;
+      }
       const dim = await probeImageSize(data.tokenUrl);
       const form: TransformForm = {
         image: {
@@ -392,6 +573,13 @@ export async function setupTransform(): Promise<void> {
         footprint: footprintForSize(data.size),
         name: data.name || (en ? "Transformed" : "变身形态"),
         label: data.name || (en ? "Transformed" : "变身形态"),
+        bestiarySlug: data.bestiarySlug,
+        hp: typeof data.hp === "number" ? data.hp : undefined,
+        ac: typeof data.ac === "number" ? data.ac : undefined,
+        dexMod: typeof data.dexMod === "number" ? data.dexMod : undefined,
+        hpMode: normalizeTransformHpMode(data.hpMode),
+        type: data.type,
+        cr: data.cr,
       };
       await applyTransform(data.itemId, form);
       await closeMonsterPicker();
@@ -423,6 +611,7 @@ export async function setupTransform(): Promise<void> {
 export function teardownTransform(): void {
   for (const u of unsubs.splice(0)) { try { u(); } catch {} }
   try { void OBR.contextMenu.remove(CTX_TRANSFORM); } catch {}
+  try { void OBR.contextMenu.remove(CTX_TRANSFORM_PLAYER); } catch {}
   try { void OBR.contextMenu.remove(CTX_REVERT); } catch {}
   void closeMonsterPicker();
   try { void OBR.popover.close(POPOVER_ID); } catch {}

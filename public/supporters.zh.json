@@ -1,6 +1,6 @@
 [
   { "name": "fu读机", "amount": 150 },
-  { "name": "折云", "amount": 70 },
+  { "name": "折云", "amount": 90 },
   { "name": "咸鱼", "amount": 10 },
   { "name": "呸呸", "amount": 20 },
   { "name": "Ejectam719", "amount": 10 },
@@ -103,5 +103,10 @@
   { "name": "君兮同学", "amount":15 },
   { "name": "thinkquin", "amount":20 },
   { "name": "y²", "amount":5 },
-  { "name": "安洛舞", "amount":10 }
+  { "name": "安洛舞", "amount":10 },
+  { "name": "xhchi_小火车", "amount":50 },
+  { "name": "一梦", "amount":30 },
+  { "name": "塔", "amount":26.6 },
+  { "name": "小白", "amount":10 },
+  { "name": "欧欧", "amount":100 }
 ]

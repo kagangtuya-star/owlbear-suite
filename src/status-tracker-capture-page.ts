@@ -40,6 +40,7 @@ import { getTokenCircleSpec } from "./modules/statusTracker/circles";
 const MODAL_ID = `${PLUGIN_ID}/capture`;
 const BC_DRAG_END = `${PLUGIN_ID}/drag-end`;
 const BC_OPEN_MANAGE = `${PLUGIN_ID}/open-manage`;
+const BC_SELECT_CANCEL = `${PLUGIN_ID}/select-cancel`;
 
 const params = new URLSearchParams(location.search);
 type DragKind = "buff" | "clear" | "manage" | "manage-transfer" | "preset";
@@ -396,6 +397,13 @@ function paintRingHover(activeId: string | null): void {
   }
 }
 
+async function cancelSelectedCarry(): Promise<void> {
+  try {
+    await OBR.broadcast.sendMessage(BC_SELECT_CANCEL, {}, { destination: "LOCAL" });
+  } catch {}
+  await endDrag();
+}
+
 // --- Pointer handling ---
 
 window.addEventListener("pointermove", (e) => {
@@ -454,21 +462,41 @@ window.addEventListener("pointerup", async (e) => {
   await endDrag();
 });
 
-// click-place placement: the buff was picked up by a left-click on
-// the palette (that click completed back on the palette window), so
-// the FIRST pointerdown the overlay sees is the PLACEMENT. A click
-// on a token's ring applies / clears / manages it; a click on empty
-// space just discards the carried buff. Either way the carry ends.
+// click-place: the selected palette bubble stays on the cursor until
+// the user cancels it. Left-clicking a token applies / clears /
+// manages it; left-clicking empty space is a no-op; right-click
+// anywhere cancels.
 window.addEventListener("pointerdown", async (e) => {
   if (mode !== "click-place") return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.button === 2) {
+    await cancelSelectedCarry();
+    return;
+  }
+  if (e.button !== 0) return;
   const hit = pointerToRing(e.clientX, e.clientY);
-  if (hit) await actOnToken(hit);
-  await endDrag();
+  if (!hit) return;
+  await actOnToken(hit);
+  if (kind === "manage") {
+    await cancelSelectedCarry();
+  } else {
+    await refreshRings();
+  }
 });
 
-window.addEventListener("pointercancel", () => { void endDrag(); });
-window.addEventListener("blur", () => { void endDrag(); });
-window.addEventListener("contextmenu", (e) => e.preventDefault());
+window.addEventListener("pointercancel", () => {
+  if (mode === "click-place") void cancelSelectedCarry();
+  else void endDrag();
+});
+window.addEventListener("blur", () => {
+  if (mode === "click-place") void cancelSelectedCarry();
+  else void endDrag();
+});
+window.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  if (mode === "click-place") void cancelSelectedCarry();
+});
 
 // === Stuck-cursor safety nets ===========================================
 //
@@ -510,9 +538,10 @@ const dragStartedAt = Date.now();
 // user may legitimately pause to decide where to place — so it gets
 // far more generous watchdog limits than a press-drag (which is
 // always a sub-second gesture).
-const IDLE_LIMIT_MS = mode === "click-place" ? 20000 : 5000;
-const CAP_LIMIT_MS = mode === "click-place" ? 120000 : 30000;
+const IDLE_LIMIT_MS = 5000;
+const CAP_LIMIT_MS = 30000;
 const watchdogId = setInterval(() => {
+  if (mode === "click-place") return;
   const now = Date.now();
   // Idle watchdog: no pointer activity for a while → assume the
   // pointerup was lost in transit (press-drag) or the carry was
@@ -530,11 +559,14 @@ const watchdogId = setInterval(() => {
   }
 }, 250);
 
-window.addEventListener("mouseup", () => { void endDrag(); }, true);
+window.addEventListener("mouseup", () => {
+  if (mode !== "click-place") void endDrag();
+}, true);
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
-    void endDrag();
+    if (mode === "click-place") void cancelSelectedCarry();
+    else void endDrag();
   }
 });
 
@@ -544,6 +576,7 @@ document.addEventListener("visibilitychange", () => {
 // post-drag delay so the gesture's own pointerup→click sequence
 // doesn't immediately self-cancel.
 window.addEventListener("click", () => {
+  if (mode === "click-place") return;
   if (Date.now() - dragStartedAt > 200) {
     void endDrag();
   }
@@ -559,7 +592,8 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     e.preventDefault();
     e.stopPropagation();
-    void endDrag();
+    if (mode === "click-place") void cancelSelectedCarry();
+    else void endDrag();
   }
 }, true);
 

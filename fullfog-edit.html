@@ -350,7 +350,7 @@
       }
       .output-mode-btn + .output-mode-btn { border-left: 1px solid var(--border-strong); }
     </style>
-  </head>
+</head>
   <body>
     <div id="app">
       <header>
@@ -402,6 +402,18 @@
         <button class="tool-btn" data-tool="picker" data-en-title="Color picker (9): pick a color from the map; auto-switches to the “Color distance” algorithm targeting it." title="取色器（9）：在地图上吸一个颜色，自动切到『颜色距离』算法以这个颜色为目标识别。">
           <span class="ico">💧</span><span data-en="Pick">取色</span>
         </button>
+        <!-- 2026-05-26 (Phase D) — Door tool. Two-click placement of a
+             straight line. Red = closed (default), green = open. On
+             save each door becomes a tiny FOG-layer Path with
+             dynamic-fog door metadata covering ~100% of its length;
+             the official dynamic-fog plugin then auto-handles wall
+             slicing on open/close. Doors are SEPARATE from the mask
+             — brush / algorithm can't erase them. -->
+        <button class="tool-btn" data-tool="door"
+                data-en-title="Door (D): two-click to place a straight-line door — first click sets one endpoint, second click commits. Default closed (red). With the tool active, click a door to select; drag endpoint or whole line to move; right-click for toggle open/close + delete. Doors are saved as dynamic-fog-compatible door segments — they need the official dynamic-fog plugin to actually function as doors in OBR vision."
+                title="门（D）：两次点击落一段直线门，第一次点定起点，第二次点定终点。默认关闭（红色）。门工具激活时点击门可选中；拖端点或整段移动；右键弹菜单（开/关 + 删除）。门与 mask 分开存储，画笔和算法擦不掉。保存后会生成兼容 dynamic-fog 插件的门段——需要 OBR 里安装 dynamic-fog 插件才能让门实际起作用。">
+          <span class="ico">🚪</span><span data-en="Door">门</span>
+        </button>
       </div>
 
       <div id="canvas-wrap">
@@ -420,6 +432,34 @@
                   title="显示当前算法生成的纯黑白结果（黑=墙，白=空），所见即所得。算法滑块改变时实时更新。手动画笔依然在 mask 上工作。"
                   data-en="B/W preview"
                   data-en-title="Show the pure black-and-white result of the current algorithm (black = wall, white = empty), WYSIWYG. Updates live as you move the algorithm sliders. Manual brushing still works on the mask.">灰白预览</button>
+        </div>
+
+        <!-- 2026-05-26 (Phase C) — B&W reference image. Import an
+             AI-generated black-line-on-white walls overlay; algorithms
+             run against it instead of the noisy original. Auto-
+             resampled to the original's pixel dimensions. -->
+        <h3 data-en="B&amp;W reference">黑白参考图
+          <span class="help" style="font-weight:normal;margin-left:6px"
+                title="把原图喂给 AI 让它生成「白底黑线」的纯墙体俯视图，导入这里。开启「显示」后会半透明叠在原图上，方便对齐和微调；点「应用算法」时会用这张黑白图作为输入（而不是原图），得到干净得多的迷雾。保存仍写到原图的绑定。"
+                data-en-title="Feed the original map to an AI and ask for a clean white-background / black-line walls-only top-down view. Import that here: when shown, it overlays semi-transparently on the original for alignment; when you click 'Apply algorithm', it's used as input instead of the noisy original. Save still binds to the original map.">?</span></h3>
+        <div class="row" style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="action" id="btn-bw-import" type="button"
+                  data-en="📂 Import B&amp;W">📂 导入黑白图</button>
+          <button class="action" id="btn-bw-clear" type="button" disabled
+                  data-en="✕ Clear">✕ 清除</button>
+        </div>
+        <div class="row">
+          <label class="lbl" style="flex-direction:row;align-items:center;gap:8px">
+            <input type="checkbox" id="bw-show" disabled checked />
+            <span data-en="Show overlay">显示叠加</span>
+          </label>
+        </div>
+        <div class="row">
+          <label class="lbl">
+            <span data-en="Opacity">不透明度</span>
+            <span class="val" id="bw-opacity-val">85%</span>
+          </label>
+          <input type="range" id="bw-opacity" min="0" max="100" value="85" disabled />
         </div>
 
         <h3 data-en="Pre-processing">预处理</h3>

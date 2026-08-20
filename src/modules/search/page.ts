@@ -17,6 +17,7 @@ import {
   getLocalDataByKeySource,
   getLocalContentSignature,
   initLocalContent,
+  forceReloadLocalContent,
   BC_LOCAL_CONTENT_CHANGED,
 } from "../../utils/localContent";
 
@@ -1964,10 +1965,17 @@ OBR.onReady(() => {
   });
   // Local-content imports / removals → drop the in-memory + LS
   // index cache so the next search pulls a fresh merged index.
+  // 2026-05-27 — also force-reload the localContent in-memory mirror
+  // from IDB. Without that, this iframe's `memFiles` map still holds
+  // its boot-time snapshot and any new file written by the settings
+  // iframe (manual import OR URL subscription refresh) wouldn't be
+  // visible here until the user reloads the whole page.
   OBR.broadcast.onMessage(BC_LOCAL_CONTENT_CHANGED, () => {
-    indexCache = null;
-    dataCache.clear();
-    dataPending.clear();
+    void forceReloadLocalContent().then(() => {
+      indexCache = null;
+      dataCache.clear();
+      dataPending.clear();
+    });
   });
 });
 

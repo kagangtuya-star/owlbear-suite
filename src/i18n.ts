@@ -1,4 +1,5 @@
-import { Language } from "./state";
+import type { Language } from "./state";
+export type { Language } from "./state";
 
 // Translation strings shared across all suite UI. Keep keys flat so it's
 // easy to grep. Add a key once it's used in ≥2 places, or once it appears
@@ -309,6 +310,40 @@ const TR: Dict = {
     zh: "打开本地文件选择器上传 xlsx",
     en: "Open local file picker to upload xlsx",
   },
+  // 2026-05-26 — preview entry points right below 选择文件.
+  ccPanelViewSample: { zh: "👁 查看示例", en: "👁 View Example" },
+  ccPanelViewSampleTitle: {
+    zh: "打开一份内置的示例角色卡（只读）",
+    en: "Open a bundled example character card (read-only)",
+  },
+  ccPanelPasteJson: { zh: "📋 粘贴 JSON", en: "📋 Paste JSON" },
+  ccPanelPasteJsonTitle: {
+    zh: "粘贴角色卡 JSON 直接生成预览（只读，不保存到房间）",
+    en: "Paste card JSON to generate a preview (read-only, not saved to the room)",
+  },
+  ccPasteJsonModalTitle: { zh: "粘贴角色卡 JSON", en: "Paste Character Card JSON" },
+  ccPasteJsonHint: {
+    zh: "粘贴一段角色卡 schema (含 abilities / identity 等字段) 的 JSON。确认后会打开一个只读预览窗口，不会保存到房间。",
+    en: "Paste a character-card schema JSON (must contain abilities / identity). On apply, a read-only preview window opens; nothing is saved to the room.",
+  },
+  ccPasteJsonApply: { zh: "确认", en: "Apply" },
+  ccPasteJsonApplying: { zh: "导入中…", en: "Importing…" },
+  ccPasteJsonCancel: { zh: "取消", en: "Cancel" },
+  ccPasteJsonInvalid: {
+    zh: "无效的 JSON（应为角色卡 schema，至少含 abilities 或 identity 字段）",
+    en: "Invalid JSON (expected a character-card schema with at least abilities or identity)",
+  },
+  // Read-only badge shown on the preview card in cc-fullscreen.
+  // 2026-05-26 — dropped "中文"/"Chinese" qualifier now that each
+  // language has its own dedicated example (zh→本杰明, en→Benjamin
+  // Flamingo). The badge just says "Example" because the sample
+  // matches the UI language naturally.
+  ccPreviewBadgeSample: { zh: "示例 · 只读", en: "Example · Read-only" },
+  ccPreviewBadgePaste: { zh: "粘贴预览 · 只读", en: "Pasted Preview · Read-only" },
+  ccPreviewMissingPayload: {
+    zh: "未找到预览数据 —— 请回到角色卡面板重新点击「查看示例」或「粘贴 JSON」。",
+    en: "No preview payload found — go back to the character card panel and click 'View Example' or 'Paste JSON' again.",
+  },
   ccPanelRefreshHint: {
     zh: "每张卡片旁的 ↻ 可重新选择 xlsx 覆盖更新",
     en: "Click ↻ next to a card to re-pick xlsx and overwrite",
@@ -549,10 +584,10 @@ const TR: Dict = {
   stCatMinOne: { zh: "至少保留一个分组，无法删除「{name}」。", en: "Keep at least one group — can't delete \"{name}\"." },
   stCatDeleteConfirm: { zh: "删除分类「{name}」？该分类下的 buff 会移到「{uncat}」。", en: "Delete category \"{name}\"? Its buffs move to \"{uncat}\"." },
   // footer hint lines — contain <b>/<kbd> markup; {x} = the red cross SVG icon
-  stFootApply1: { zh: "<b>左键</b>拖到目标释放 = 应用 buff", en: "<b>Left-drag</b> onto a target = apply buff" },
-  stFootApply2: { zh: "<b>右键</b>拖过角色 = 路径切换 (有则去)", en: "<b>Right-drag</b> across characters = toggle (remove if present)" },
-  stFootApply3: { zh: "<b>左键</b>拖红色 {x}= 单个清除", en: "<b>Left-drag</b> the red {x}= clear one" },
-  stFootApply4: { zh: "<b>右键</b>拖红色 {x}= 路径全清", en: "<b>Right-drag</b> the red {x}= clear along path" },
+  stFootApply1: { zh: "<b>左键</b>状态 = 选中；再点角色 = 应用 / 切换", en: "<b>Left-click</b> a status = select; then click a character = apply / toggle" },
+  stFootApply2: { zh: "<b>右键</b> = 取消当前选中", en: "<b>Right-click</b> = cancel current selection" },
+  stFootApply3: { zh: "<b>左键</b>红色 {x}= 选中清除；再点角色 = 清空", en: "<b>Left-click</b> red {x}= select clear; then click a character = clear" },
+  stFootApply4: { zh: "<b>管理</b> = 选中后点角色，打开该角色 buff 管理", en: "<b>Manage</b> = select, then click a character to open buff management" },
   stFootApply5: { zh: "<kbd>]</kbd> 关闭面板", en: "<kbd>]</kbd> close panel" },
   stFootEdit1: { zh: "<b>点击</b>分类 = 重命名（清空 = 删除）", en: "<b>Click</b> a category = rename (clear = delete)" },
   stFootEdit2: { zh: "<b>拖</b>分类 = 排序", en: "<b>Drag</b> a category = reorder" },

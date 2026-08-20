@@ -417,7 +417,7 @@ body.edit-mode .cat-btn.drop-target{
   border:none;border-radius:0;
   font-size:11px;font-weight:700;
   white-space:nowrap;
-  cursor:grab;
+  cursor:pointer;
   user-select:none;
   position:relative;
   overflow:hidden;
@@ -429,7 +429,12 @@ body.edit-mode .cat-btn.drop-target{
 /* Hover affordance: dim slightly via opacity (no brightness/saturate
    filters that mimic the old glossy roll-over). */
 .bubble:hover{opacity:0.86}
-.bubble:active{cursor:grabbing;opacity:0.74}
+.bubble:active{opacity:0.74}
+.bubble.selected{
+  outline:2px solid rgba(255,255,255,0.78);
+  outline-offset:-2px;
+  opacity:1;
+}
 
 /* Eraser pill — full-width row, flat red 80%. */
 .bubble.eraser{
@@ -793,18 +798,14 @@ body.edit-mode .bubble.drop-after{
     <div class="bp-label" id="bp-label"></div>
   </div>
   <div class="foot" id="foot">
-    <div class="foot-line"><b>左键</b>拖到目标释放 = 应用 buff</div>
-    <div class="foot-line"><b>右键</b>拖过角色 = 路径切换 (有则去)</div>
-    <div class="foot-line"><b>左键</b>拖红色
+    <div class="foot-line"><b>左键</b>状态 = 选中；再点角色 = 应用 / 切换</div>
+    <div class="foot-line"><b>右键</b> = 取消当前选中</div>
+    <div class="foot-line"><b>左键</b>红色
       <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none"
            stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
            style="vertical-align:-2px;margin:0 3px"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-      = 单个清除</div>
-    <div class="foot-line"><b>右键</b>拖红色
-      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none"
-           stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-           style="vertical-align:-2px;margin:0 3px"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-      = 路径全清</div>
+      = 选中清除；再点角色 = 清空</div>
+    <div class="foot-line"><b>管理</b> = 选中后点角色，打开该角色 buff 管理</div>
     <div class="foot-line"><kbd>]</kbd> 关闭面板</div>
   </div>
   <div class="popup" id="popup"></div>

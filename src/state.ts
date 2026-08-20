@@ -180,10 +180,12 @@ export const DEFAULT_STATE: SuiteState = {
     // images. Right-click MAP layer → fullscreen modal → algorithms
     // (Otsu / adaptive / color-exclude / saturation-aware / threshold)
     // + manual tools (brush / eraser / lasso / wand / bucket) → save
-    // as a single low-drawcall Path item attached to the map. Dev-only
-    // (hidden from stable until polished). Disabled when STABLE_HIDES
-    // is true.
-    fullFog: !STABLE_HIDES,
+    // as a single low-drawcall Path item attached to the map.
+    // 2026-05-26 — promoted to stable. The setupFullFog() body still
+    // gates the light + dev-door-tool subsystems on !STABLE_HIDES so
+    // stable only sees the editor + map context menu; light + the old
+    // door/window tool modes stay dev-only.
+    fullFog: true,
     // Trickster — DM-placed circular trigger zone. When a target
     // token drag-commits into the zone, fires a one-shot time stop
     // + camera focus on the entering token. Useful for ambush
@@ -211,10 +213,9 @@ export const DEFAULT_STATE: SuiteState = {
     // hard-pinned OFF regardless of any stored room state. Settings
     // entry remains and links to the studio website.
     musicBoard: false,
-    // Transform (变身 / polymorph) — added 2026-05-20, dev-only while
-    // the scaffold (context menu + snapshot/revert + ad-hoc image swap)
-    // is being fleshed out into preset forms + two-stage effects +
-    // bestiary binding + camera focus.
+    // Transform (变身 / polymorph) — right-click CHARACTER tokens to
+    // pick a bestiary form, swap token art + monster metadata, and
+    // revert from a per-token transform stack. Stable default ON.
     transform: true,
   },
   dataVersion: "2024",
@@ -278,8 +279,18 @@ function merge(partial: any): SuiteState {
       if (!seen.has(def.id)) libraries.unshift(def);
     }
   }
+  // 2026-05-26 — fullFog migration: stable users upgrading from a
+  // previous build (where fullFog defaulted to false) will have
+  // `fullFog: false` baked into their stored room metadata. The
+  // promotion to stable changes the default to true, but the spread
+  // below would let the stored false override the new default and
+  // leave the right-click "编辑地图迷雾" menu missing. Hard-pin
+  // fullFog ON during state load so it always reflects the new
+  // default, while still letting the user toggle other modules.
+  const mergedEnabled = { ...DEFAULT_STATE.enabled, ...(partial.enabled ?? {}) };
+  mergedEnabled.fullFog = true;
   return {
-    enabled: { ...DEFAULT_STATE.enabled, ...(partial.enabled ?? {}) },
+    enabled: mergedEnabled,
     dataVersion: partial.dataVersion ?? DEFAULT_STATE.dataVersion,
     allowPlayerMonsters:
       partial.allowPlayerMonsters ?? DEFAULT_STATE.allowPlayerMonsters,
@@ -404,10 +415,15 @@ export function onStateChange(fn: (s: SuiteState) => void): () => void {
 // but we don't gate here — the UI hides write controls for non-GM users.
 export async function setState(partial: Partial<SuiteState>): Promise<void> {
   const prev = cached;
+  // 2026-05-26 — mirror the hard-pin in getState() / migrate path:
+  // fullFog is always ON regardless of any partial update that might
+  // try to flip it off (e.g. a stale UI toggle on an upgraded room).
+  const mergedEnabled = { ...cached.enabled, ...(partial.enabled ?? {}) };
+  mergedEnabled.fullFog = true;
   const next: SuiteState = {
     ...cached,
     ...partial,
-    enabled: { ...cached.enabled, ...(partial.enabled ?? {}) },
+    enabled: mergedEnabled,
   };
 
   if (suiteStateEqual(prev, next)) return;

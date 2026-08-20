@@ -64,7 +64,15 @@ export type ToolId =
   | "line"
   | "magicWand"
   | "paintBucket"
-  | "picker";
+  | "picker"
+  // 2026-05-26 (Phase D) — door tool. Two-click placement of a
+  // straight line segment; the segment becomes a dynamic-fog door
+  // on save (a tiny FOG-layer Path with a Door[] metadata entry
+  // covering ~100% of its length, so when the door is OPEN
+  // WallActor subtracts the entire segment and no wall remains;
+  // when CLOSED the full segment renders as a wall). Doors are
+  // STORED SEPARATELY from the mask, never erased by brush/algo.
+  | "door";
 
 /** Tools that have a per-tool ADD / ERASE mode toggle (right-click
  *  the tool button to flip). Brush/eraser are separate tools so they

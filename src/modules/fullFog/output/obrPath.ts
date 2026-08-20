@@ -99,6 +99,12 @@ export function buildFogPath(
      *  outline kind ever needs this; passing it on darkFog kinds is
      *  harmless because those Paths are skipped by the watcher. */
     wallExpandPx?: number;
+    /** 2026-05-26 — when false (editor "independent" save mode), the
+     *  Path is NOT attached to the map; it stays put if the map is
+     *  moved later, and is unlocked + hit-enabled so the GM can
+     *  select / edit it via OBR's native item tools. Defaults true
+     *  (current behaviour: bound to map, locked, follows transforms). */
+    bindToMap?: boolean;
   } = {},
 ): any | null {
   if (localPolys.length === 0) return null;
@@ -135,6 +141,15 @@ export function buildFogPath(
   const layer = options.layer ?? "FOG";
   const zIndex = options.zIndex;
 
+  // 2026-05-26 — bindToMap=false produces a STANDALONE Path: same
+  // visual / metadata, but no `attachedTo` (won't follow the map if
+  // it moves), unlocked + hit-enabled (so the GM can select / move
+  // / edit it with native OBR tools). Used by the editor's
+  // "independent" save mode. position/rotation/scale still mirror
+  // the map's CURRENT transform so the standalone item appears at
+  // the right world location at save time.
+  const bindToMap = options.bindToMap !== false;
+
   let b = buildPath()
     .commands(commands)
     .fillRule("evenodd")
@@ -148,16 +163,17 @@ export function buildFogPath(
     .scale(scl)
     .rotation(rot)
     .visible(true)
-    .locked(true)
-    .disableHit(true)
-    .attachedTo(mapId)
-    .disableAttachmentBehavior(["VISIBLE", "COPY"])
+    .locked(bindToMap)
+    .disableHit(bindToMap)
     .metadata({
       [FOG_PATH_KEY]: true,
       [FOG_PATH_KIND_KEY]: kind,
-      [FOG_MAP_KEY]: { mapId, savedAt: Date.now(), kind },
+      [FOG_MAP_KEY]: { mapId, savedAt: Date.now(), kind, bindToMap },
       [FOG_WALL_EXPAND_KEY]: Math.max(0, Math.round(options.wallExpandPx ?? 0)),
     });
+  if (bindToMap) {
+    b = b.attachedTo(mapId).disableAttachmentBehavior(["VISIBLE", "COPY"]);
+  }
   if (typeof zIndex === "number") {
     b = b.zIndex(zIndex).disableAutoZIndex(true);
   }

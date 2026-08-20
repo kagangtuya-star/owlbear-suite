@@ -11,7 +11,7 @@ import {
   BC_PANEL_RESET,
   type DragEndPayload,
 } from "../../utils/panelLayout";
-import { BC_LOCAL_CONTENT_CHANGED } from "../../utils/localContent";
+import { BC_LOCAL_CONTENT_CHANGED, forceReloadLocalContent } from "../../utils/localContent";
 import { clearMonsterCache, loadAllMonsters, getRawMonster } from "./data";
 import { onStateChange, getState, getLocalLang } from "../../state";
 import { createCanvasDragMode } from "../../utils/canvasDragMode";
@@ -172,7 +172,7 @@ const BUBBLES_NAME = "com.owlbear-rodeo-bubbles-extension/name";
 const INITIATIVE_MODKEY = "com.initiative-tracker/dexMod";
 
 const isAutoPopupOn = (): boolean => {
-  try { return localStorage.getItem(AUTO_POPUP_KEY) !== "0"; } catch { return true; }
+  try { return localStorage.getItem(AUTO_POPUP_KEY) === "1"; } catch { return false; }
 };
 
 const POPOVER_WIDTH = 350;
@@ -399,8 +399,15 @@ export async function setupBestiary(): Promise<void> {
   // "删除重新上传也没用 / re-upload doesn't update" 2026-05-10).
   unsubs.push(
     OBR.broadcast.onMessage(BC_LOCAL_CONTENT_CHANGED, () => {
-      clearMonsterCache();
-      void refreshSharedMonsterTableFromLocal();
+      // 2026-05-27 — also reload the localContent in-memory mirror
+      // from IDB, otherwise this iframe never sees content written by
+      // the settings iframe (manual imports OR URL-subscription
+      // refreshes); the subsequent clearMonsterCache then re-derives
+      // from fresh memFiles.
+      void forceReloadLocalContent().then(() => {
+        clearMonsterCache();
+        void refreshSharedMonsterTableFromLocal();
+      });
     }),
   );
 

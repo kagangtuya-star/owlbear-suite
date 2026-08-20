@@ -1,8 +1,8 @@
 // Status Tracker — palette popover.
 //
-// APPLY mode (default): flat grid of buff bubbles. Left/right
-// pointer-down on a bubble fires the capture overlay (drag = apply
-// or paint-toggle on tokens).
+// APPLY mode (default): flat grid of buff bubbles. Left-click a bubble
+// to select it, then left-click tokens on the canvas to apply/toggle.
+// Right-click cancels the current selection.
 //
 // EDIT mode (toggle ✎ in the toolbar): same flat grid, but every
 // element morphs into an editable affordance:
@@ -60,13 +60,11 @@ const BC_DRAG_START = `${PLUGIN_ID}/drag-start`;
 const BC_DRAG_END = `${PLUGIN_ID}/drag-end`;
 const BC_TOGGLE = `${PLUGIN_ID}/toggle`;
 const BC_REFRESH_TOKEN = `${PLUGIN_ID}/refresh-token`;
+const BC_SELECT_APPLY = `${PLUGIN_ID}/select-apply`;
+const BC_SELECT_CANCEL = `${PLUGIN_ID}/select-cancel`;
+const BC_SELECT_STATE = `${PLUGIN_ID}/select-state`;
 
-// Mode of the most recent BC_DRAG_START. The safety-net pointerup
-// handler skips its BC_DRAG_END broadcast while this is
-// "click-place" — in that mode the button release is part of the
-// pickup gesture (the buff is now carried on the cursor), never an
-// abort. paint-toggle still gets the safety-net broadcast.
-let lastDragStartMode: "click-place" | "paint-toggle" | null = null;
+let selectedApplyKey: string | null = null;
 
 const dragHandle = document.getElementById("dragHandle") as HTMLDivElement;
 const btnClose = document.getElementById("btnClose") as HTMLButtonElement;
@@ -866,6 +864,13 @@ try {
   });
 } catch { /* OBR not ready yet — listener attaches when palette mounts */ }
 
+try {
+  OBR.broadcast.onMessage(BC_SELECT_STATE, (msg) => {
+    const data = msg.data as { key?: string | null } | undefined;
+    setSelectedApplyKey(data?.key ?? null);
+  });
+} catch { /* OBR not ready yet — palette can still set its local state */ }
+
 function mergedGroupOrder(prior: string[], list: BuffDef[]): string[] {
   // Preserve every group the user has explicitly added to `prior`,
   // even if it currently has zero buffs. Auto-discovered groups
@@ -919,6 +924,43 @@ function stripEmoji(s: string): string {
           .trim();
 }
 
+function setSelectedApplyKey(key: string | null): void {
+  selectedApplyKey = key;
+  if (!editMode) renderGrid();
+}
+
+async function cancelApplySelection(): Promise<void> {
+  if (!selectedApplyKey) return;
+  selectedApplyKey = null;
+  renderGrid();
+  try {
+    await OBR.broadcast.sendMessage(BC_SELECT_CANCEL, {}, { destination: "LOCAL" });
+  } catch {}
+}
+
+async function selectApplyBubble(id: string): Promise<void> {
+  if (editMode) return;
+  popupEl.classList.remove("open");
+  hideBuffPreviewDeferred();
+  let payload: any | null = null;
+  if (id === "__clear__") {
+    payload = { kind: "clear", key: "__clear__" };
+  } else if (id === "__manage__") {
+    payload = { kind: "manage", key: "__manage__" };
+  } else {
+    const buff = buffs.find((b) => b.id === id) ?? null;
+    if (!buff) return;
+    payload = { kind: "buff", key: id, buff };
+  }
+  selectedApplyKey = id;
+  renderGrid();
+  try {
+    await OBR.broadcast.sendMessage(BC_SELECT_APPLY, payload, { destination: "LOCAL" });
+  } catch (err) {
+    console.warn("[status/palette] BC_SELECT_APPLY failed", err);
+  }
+}
+
 // Inline SVG icons used in place of emoji in the user-visible UI.
 // All are 14px stroke-based monochrome and inherit `currentColor`
 // so they pick up the surrounding bubble/text colour.
@@ -954,8 +996,8 @@ function renderFilters(): void {
   for (const g of groups) {
     // Category-button drag (re-order categories) is edit-mode only,
     // and so is the buff-drop receiver. The 2026-05-08 attempt to
-    // also accept buff drops in apply mode broke drag-to-token and
-    // got reverted (see renderGrid + onBubblePointerDown comments).
+    // also accept buff drops in apply mode broke the old token-apply
+    // gesture and got reverted.
     const dragAttr = editMode ? `draggable="true"` : "";
     const isOn = (!editMode && activeFilter === g) ? "on" : "";
     html += `<button class="cat-btn ${isOn}" data-g="${escapeHtml(g)}" ${dragAttr}>${escapeHtml(groupLabel(g))}</button>`;
@@ -1100,12 +1142,13 @@ function renderGrid(): void {
 
   let html = "";
   if (!editMode) {
-    html += `<div class="bubble eraser" data-id="__clear__">${SVG_CROSS}${T("stClearAllBuffs")}</div>`;
-    // Manage pill: drag onto a token, on release the capture
-    // overlay broadcasts BC_OPEN_MANAGE → background opens a popover
-    // anchored on the token listing its current buffs. From there
-    // each buff is independently draggable to remove or transfer.
-    html += `<div class="bubble manage" data-id="__manage__">${SVG_WRENCH}${T("stManageBuffs")}</div>`;
+    const eraserSelected = selectedApplyKey === "__clear__" ? " selected" : "";
+    const manageSelected = selectedApplyKey === "__manage__" ? " selected" : "";
+    html += `<div class="bubble eraser${eraserSelected}" data-id="__clear__">${SVG_CROSS}${T("stClearAllBuffs")}</div>`;
+    // Manage pill: select it, then click a token to open that token's
+    // management popover. From there each buff is independently
+    // draggable to remove or transfer.
+    html += `<div class="bubble manage${manageSelected}" data-id="__manage__">${SVG_WRENCH}${T("stManageBuffs")}</div>`;
   }
   for (const b of list) {
     const fg = textColorFor(b.color);
@@ -1122,7 +1165,8 @@ function renderGrid(): void {
     // different gesture (right-click menu, long-press, modifier
     // key, etc.) which we'll revisit separately.
     const dragAttr = editMode ? `draggable="true"` : "";
-    const cls = editMode ? "bubble editable" : "bubble";
+    const selectedCls = !editMode && selectedApplyKey === b.id ? " selected" : "";
+    const cls = editMode ? "bubble editable" : `bubble${selectedCls}`;
     // 2026-05-18 — REVERTED the inline thumbnails (both <img> for
     // iconAsset and <video> for webmAsset). The <video> element
     // renders a solid BLACK fill until its first frame paints, which
@@ -1165,8 +1209,16 @@ function renderGrid(): void {
     }
 
     if (!editMode) {
-      el.addEventListener("pointerdown", (e) => onBubblePointerDown(e, el));
-      el.addEventListener("contextmenu", (e) => e.preventDefault());
+      el.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void selectApplyBubble(id);
+      });
+      el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void cancelApplySelection();
+      });
       return;
     }
     if (id === "__clear__") return; // shouldn't render in edit mode
@@ -1217,99 +1269,6 @@ function renderGrid(): void {
     });
   });
 }
-
-// === Apply-mode pointer (drag start) ========================================
-
-async function onBubblePointerDown(e: PointerEvent, el: HTMLElement): Promise<void> {
-  if (editMode) return;
-  if (e.button !== 0 && e.button !== 2) return;
-  // preventDefault is critical here: it stops the browser from
-  // initiating an HTML5 drag (which would fire pointercancel and
-  // cause the global handler to broadcast BC_DRAG_END, slamming the
-  // capture overlay shut before the user finishes dragging onto a
-  // token). The trade-off is that apply-mode bubbles can't use
-  // HTML5 drag for cross-group moves; that gesture needs a separate
-  // mechanism (TODO: long-press / right-click menu).
-  e.preventDefault();
-  e.stopPropagation();
-  const id = el.dataset.id ?? "";
-  if (!id) return;
-  const isEraser = id === "__clear__";
-  const isManage = id === "__manage__";
-  const buff = (isEraser || isManage) ? null : buffs.find((b) => b.id === id) ?? null;
-  if (!isEraser && !isManage && !buff) return;
-  // Both eraser AND buff bubbles split by mouse button:
-  //   left  → "click-place"   pick the buff up onto the cursor; the
-  //           NEXT click places it — on a token's ring = apply, on
-  //           empty space = discard. No button-hold / drag needed.
-  //   right → "paint-toggle"  press-drag: apply / clear EVERY token
-  //           the cursor's path crosses. Unchanged.
-  // Manage pill is click-place only — paint-toggle would open a
-  // popover for every token the cursor passes, which is not useful.
-  const mode: "click-place" | "paint-toggle" =
-    (isManage || e.button !== 2) ? "click-place" : "paint-toggle";
-  // Record the mode so the safety-net pointerup handler knows whether
-  // the imminent button release should broadcast BC_DRAG_END (it
-  // should NOT for click-place — the release is the pickup gesture).
-  lastDragStartMode = mode;
-  try {
-    let payload: any;
-    if (isEraser)      payload = { kind: "clear", mode };
-    else if (isManage) payload = { kind: "manage", mode };
-    else               payload = { kind: "buff", buff, mode };
-    await OBR.broadcast.sendMessage(BC_DRAG_START, payload, { destination: "LOCAL" });
-  } catch (err) {
-    console.warn("[status/palette] BC_DRAG_START failed", err);
-  }
-}
-
-// === Stuck-cursor safety net (palette side) =================================
-//
-// The capture overlay opens asynchronously after BC_DRAG_START is
-// broadcast. If the user releases the click BEFORE the modal is
-// listening (very short tap on a buff with no drag), the pointerup
-// can land on this palette popover instead of the modal — and the
-// modal then never sees a release event, so it sticks open until
-// browser refresh.
-//
-// Mitigation: ANY pointerup on the palette also broadcasts
-// BC_DRAG_END as a "just in case" message. The capture overlay's
-// background handler closes the modal regardless of who broadcast
-// the end. If no modal is open, the broadcast is harmless.
-//
-// Exception: in click-place mode the button release is part of the
-// pickup gesture (the buff is now carried on the cursor), NOT an
-// abort — skip the BC_DRAG_END so the carry survives.
-window.addEventListener("pointerup", async () => {
-  if (lastDragStartMode === "click-place") return;
-  try {
-    await OBR.broadcast.sendMessage(BC_DRAG_END, {}, { destination: "LOCAL" });
-  } catch {}
-});
-window.addEventListener("pointercancel", async () => {
-  try {
-    await OBR.broadcast.sendMessage(BC_DRAG_END, {}, { destination: "LOCAL" });
-  } catch {}
-});
-
-// 2026-05-16 — safety-net Escape handler on the PALETTE too. The
-// capture-page modal already listens for Esc, but if it lost focus
-// mid-gesture (popover stole focus, browser tab-switched, modal
-// failed to open in time, etc.) the user could be left with a buff
-// "stuck on the cursor" with no way out short of refreshing. Esc on
-// the palette broadcasts BC_DRAG_END so the background closes the
-// capture overlay regardless. Also resets lastDragStartMode so the
-// next gesture starts clean. User report: "状态追踪中拖拽状态时常
-// 会卡住，没办法脱离拖拽状态，黏在手上，除非刷新界面否则取消不了."
-window.addEventListener("keydown", async (e) => {
-  if (e.key !== "Escape") return;
-  e.preventDefault();
-  e.stopPropagation();
-  lastDragStartMode = null;
-  try {
-    await OBR.broadcast.sendMessage(BC_DRAG_END, {}, { destination: "LOCAL" });
-  } catch {}
-}, true);
 
 // === Edit popup =============================================================
 
@@ -1781,12 +1740,16 @@ function render(): void {
 
 btnEdit.addEventListener("click", () => {
   editMode = !editMode;
+  if (editMode) void cancelApplySelection();
   render();
 });
 
 // === Toolbar / shortcuts ====================================================
 
-window.addEventListener("contextmenu", (e) => e.preventDefault());
+window.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  void cancelApplySelection();
+});
 
 bindPanelDrag(dragHandle, PANEL_IDS.statusPalette);
 
@@ -1832,6 +1795,11 @@ if (btnRenderMode) {
 }
 window.addEventListener("keydown", async (e) => {
   if (e.key === "]" || e.key === "Escape") {
+    if (e.key === "Escape" && selectedApplyKey) {
+      e.preventDefault();
+      await cancelApplySelection();
+      return;
+    }
     if (popupBuffId) {
       popupBuffId = null;
       popupEl.classList.remove("open");

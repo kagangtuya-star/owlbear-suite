@@ -90,6 +90,8 @@ const SUPPORTER_AVATARS: Record<string, string> = {
   "蚀星ErosionStar":             "supporter-avatars/蚀星Erosionstar.png",
   "跑冰风谷水群被抓的某位":      "supporter-avatars/跑冰风谷水群被抓的某位.png",
   "鱼喵":                        "supporter-avatars/鱼喵.png",
+  "克雷锰特":                    "supporter-avatars/克雷锰特.png",
+  "xhchi_小火车":                "supporter-avatars/xhchi_小火车.png",
 };
 
 function findSupporterAvatar(name: string): string | null {

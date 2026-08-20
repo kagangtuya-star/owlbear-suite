@@ -251,6 +251,49 @@ async function refreshFromScene() {
   render();
 }
 
+// 2026-05-26 — companion to uploadFile() for the "📋 粘贴 JSON" flow.
+// Same shape as uploadFile but POSTs a JSON body to the server's
+// /create-from-json endpoint (server.py:create_character_from_json),
+// then follows the same post-upload bookkeeping: scene-metadata
+// write, BC_CARD_UPDATED broadcast, card-list re-render, focus the
+// new card. Throws on failure so the paste-modal can surface the
+// error string back to the user without losing their textarea
+// content.
+async function uploadJsonAsCard(parsed: unknown): Promise<void> {
+  showError("");
+  const sideEl = document.getElementById("side");
+  sideEl?.classList.add("busy");
+  try {
+    const u = encodeURIComponent(playerName);
+    const r = await fetch(`${API_BASE}/create-from-json?room=${roomId}&uploader=${u}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: parsed }),
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      throw new Error(err || `HTTP ${r.status}`);
+    }
+    const entry = (await r.json()) as CardEntry;
+    try {
+      // Mirror uploadFile: broadcast so bound tokens + other clients
+      // refresh. LOCAL also so this client's background propagates
+      // immediately (no stale-state until manual rebind).
+      const payload = { cardId: entry.id, url: `${entry.url}data.json` };
+      OBR.broadcast.sendMessage(BC_CARD_UPDATED, payload, { destination: "LOCAL" });
+      OBR.broadcast.sendMessage(BC_CARD_UPDATED, payload, { destination: "REMOTE" });
+    } catch {}
+    const updated = [entry, ...cards];
+    await writeCardsToScene(updated);
+    cards = updated;
+    current = { type: "card", id: entry.id };
+    showStatus(`${ICONS.check} ${tt("ccPanelUploaded")}: ${escapeHtml(entry.name)}`);
+    render();
+  } finally {
+    sideEl?.classList.remove("busy");
+  }
+}
+
 async function uploadFile(file: File) {
   showError("");
   const sideEl = document.getElementById("side");
@@ -678,15 +721,173 @@ function timeAgo(isoZ: string): string {
   } catch { return ""; }
 }
 
+// 2026-05-26 — preview-mode entry points (under 选择文件):
+//   • 查看示例: fetch /cc-example-card.json, stash it in localStorage,
+//     open cc-fullscreen.html?preview=sample in an OBR modal.
+//   • 粘贴 JSON: open a paste-textarea modal first, validate, stash
+//     in localStorage, open cc-fullscreen.html?preview=paste.
+// The fullscreen page detects ?preview= and renders read-only (no
+// edit / refresh / import-JSON buttons) + a "中文示例" badge. Nothing
+// is persisted to the server.
+const PREVIEW_MODAL_ID = "com.obr-suite/cc-preview";
+const PREVIEW_LS_KEY = "obr-suite/cc-preview-payload";
+
+function setPreviewPayload(kind: "sample" | "paste", json: unknown): void {
+  try {
+    localStorage.setItem(PREVIEW_LS_KEY, JSON.stringify({ kind, json, ts: Date.now() }));
+  } catch (e) {
+    console.warn("[cc-panel/preview] localStorage write failed", e);
+  }
+}
+
+async function openPreviewModal(kind: "sample" | "paste"): Promise<void> {
+  const url = `${assetUrl("cc-fullscreen.html")}?preview=${kind}`;
+  try {
+    await OBR.modal.open({
+      id: PREVIEW_MODAL_ID,
+      url,
+      width: Math.min(1080, Math.floor(window.innerWidth * 0.92)),
+      height: Math.floor(window.innerHeight * 0.86),
+    });
+  } catch (e) {
+    console.warn("[cc-panel/preview] modal open failed", e);
+  }
+}
+
+async function openSamplePreview(): Promise<void> {
+  // 2026-05-26 — fetch the language-matched example. There's a
+  // dedicated EN translation (cc-example-card.en.json) since the
+  // schema-0.3 card body is heavy with Chinese D&D terminology
+  // (skill / weapon / class-feature / spell-description names) that
+  // wouldn't be useful to non-Chinese DMs as a reference. ZH UI gets
+  // 本杰明 (Sorcerer / Wild Magic); EN UI gets Benjamin Flamingo
+  // with all the canonical 5E translations applied.
+  const file = lang === "en" ? "cc-example-card.en.json" : "cc-example-card.json";
+  try {
+    const res = await fetch(assetUrl(file), { cache: "no-cache" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    setPreviewPayload("sample", json);
+    await openPreviewModal("sample");
+  } catch (e: any) {
+    showError(`${tt("ccPasteJsonInvalid")}: ${e?.message ?? e}`);
+  }
+}
+
+function openPasteJsonPreview(): void {
+  // Build the paste modal inline (no extra HTML file needed). It sits
+  // on top of the panel as an absolute overlay; the Apply button
+  // validates the JSON, then routes to openPreviewModal("paste").
+  const existing = document.getElementById("ccPasteOverlay");
+  if (existing) { existing.remove(); }
+  const overlay = document.createElement("div");
+  overlay.id = "ccPasteOverlay";
+  overlay.style.cssText =
+    "position:fixed;inset:0;z-index:9999;background:rgba(8,10,14,0.78);" +
+    "display:flex;align-items:center;justify-content:center;padding:20px";
+  const panel = document.createElement("div");
+  panel.style.cssText =
+    "background:#161922;border:1px solid rgba(255,255,255,0.15);border-radius:10px;" +
+    "padding:16px 18px;max-width:680px;width:100%;max-height:80vh;display:flex;" +
+    "flex-direction:column;gap:10px;color:#e6e8ee;font-family:inherit;font-size:13px";
+  const title = document.createElement("div");
+  title.style.cssText = "font-size:14px;font-weight:600;color:#fff";
+  title.textContent = tt("ccPasteJsonModalTitle");
+  const hint = document.createElement("div");
+  hint.style.cssText = "font-size:11.5px;color:#9aa0b3;line-height:1.55";
+  hint.textContent = tt("ccPasteJsonHint");
+  const ta = document.createElement("textarea");
+  ta.style.cssText =
+    "flex:1 1 auto;min-height:280px;padding:9px 11px;border-radius:7px;" +
+    "background:#0d1018;border:1px solid rgba(255,255,255,0.12);color:#e6e8ee;" +
+    "font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;resize:vertical";
+  ta.placeholder = "{ \"schema_version\": \"0.3\", \"identity\": { ... }, \"abilities\": { ... }, ... }";
+  const errBox = document.createElement("div");
+  errBox.style.cssText = "font-size:12px;color:#e74c3c;min-height:18px";
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:8px;justify-content:flex-end";
+  const btnCancel = document.createElement("button");
+  btnCancel.type = "button";
+  btnCancel.textContent = tt("ccPasteJsonCancel");
+  btnCancel.style.cssText =
+    "padding:7px 14px;border-radius:6px;background:#262a38;color:#cfd3df;" +
+    "border:1px solid rgba(255,255,255,0.12);font-size:13px;cursor:pointer";
+  const btnApply = document.createElement("button");
+  btnApply.type = "button";
+  btnApply.textContent = tt("ccPasteJsonApply");
+  btnApply.style.cssText =
+    "padding:7px 14px;border-radius:6px;background:linear-gradient(180deg,#5dade2,#3b8fc5);" +
+    "color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer";
+  const close = () => { overlay.remove(); };
+  btnCancel.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  document.addEventListener("keydown", function onEsc(e) {
+    if (e.key === "Escape" && document.body.contains(overlay)) {
+      e.preventDefault();
+      close();
+      document.removeEventListener("keydown", onEsc);
+    }
+  });
+  btnApply.addEventListener("click", async () => {
+    errBox.textContent = "";
+    const raw = ta.value.trim();
+    if (!raw) { errBox.textContent = tt("ccPasteJsonInvalid"); return; }
+    let parsed: any;
+    try { parsed = JSON.parse(raw); } catch (e: any) {
+      errBox.textContent = `${tt("ccPasteJsonInvalid")}: ${e?.message ?? e}`;
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" ||
+        !("abilities" in parsed || "identity" in parsed)) {
+      errBox.textContent = tt("ccPasteJsonInvalid");
+      return;
+    }
+    // 2026-05-26 — POST to /create-from-json (server endpoint added
+    // the same day). Mirrors the xlsx upload flow: server allocates a
+    // cardId, writes data.json, broadcasts card-list refresh via
+    // scene-metadata write. The new card appears in the panel like
+    // any other card. Errors stay in errBox so the user can fix the
+    // payload without losing what they pasted.
+    btnApply.disabled = true;
+    btnApply.textContent = tt("ccPasteJsonApplying");
+    try {
+      await uploadJsonAsCard(parsed);
+      close();
+    } catch (e: any) {
+      errBox.textContent = `${tt("ccPanelUploadFailed")}: ${e?.message || e}`;
+    } finally {
+      btnApply.disabled = false;
+      btnApply.textContent = tt("ccPasteJsonApply");
+    }
+  });
+  btnRow.append(btnCancel, btnApply);
+  panel.append(title, hint, ta, errBox, btnRow);
+  overlay.append(panel);
+  document.body.append(overlay);
+  setTimeout(() => { ta.focus(); }, 50);
+}
+
+// Hide the 2014 / 2024 download template anchors when UI is English
+// (the xlsx templates are Chinese-悲灵-specific). The wrapper element
+// in cc-panel.html uses `display:contents` so anchors lay out the
+// same as before when shown.
+function syncLangVisibility(): void {
+  const row = document.getElementById("ccTplRow");
+  if (!row) return;
+  row.style.display = lang === "en" ? "none" : "contents";
+}
+
 // --- setup ---
 onLangChange((next) => {
   lang = next;
   applyI18nDom(lang);
+  syncLangVisibility();
   render();
 });
 
 OBR.onReady(async () => {
   applyI18nDom(lang);
+  syncLangVisibility();
   roomId = safeRoomId(OBR.room.id || "default");
   try { playerName = (await OBR.player.getName()) || "anonymous"; } catch {}
   try { myPlayerId = await OBR.player.getId(); } catch {}
@@ -765,6 +966,13 @@ OBR.onReady(async () => {
     linkBtn.style.display = "";
     linkBtn.addEventListener("click", () => { void linkLocalFile(); });
   }
+  // 2026-05-26 — preview entry points (see openSamplePreview /
+  // openPasteJsonPreview above). Both open cc-fullscreen.html in an
+  // OBR modal with ?preview=…; nothing persists to the server.
+  const sampleBtn = document.getElementById("btnViewSample") as HTMLButtonElement | null;
+  sampleBtn?.addEventListener("click", () => { void openSamplePreview(); });
+  const pasteBtn = document.getElementById("btnPasteJson") as HTMLButtonElement | null;
+  pasteBtn?.addEventListener("click", () => { openPasteJsonPreview(); });
 
   // Listen for refresh broadcasts from other clients. When the DM (or
   // any other player) refreshes a linked card, we just bump our own

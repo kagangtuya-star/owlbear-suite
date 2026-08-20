@@ -43,7 +43,7 @@ import { assetUrl } from "./asset-base";
 
 const MODAL_ID = "com.obr-suite/dm-announcement";
 
-type SectionKind = "warn" | "info" | "issues" | "highlights" | "todo" | "changelog" | "footer" | "raw";
+type SectionKind = "warn" | "info" | "notice" | "issues" | "highlights" | "todo" | "changelog" | "footer" | "raw";
 type SectionLang = "zh" | "en" | undefined; // undefined = visible in both
 
 interface Section {
@@ -63,7 +63,7 @@ interface Section {
 }
 
 const KNOWN_KINDS: ReadonlySet<SectionKind> = new Set([
-  "warn", "info", "issues", "highlights", "todo", "changelog", "footer", "raw",
+  "warn", "info", "notice", "issues", "highlights", "todo", "changelog", "footer", "raw",
 ]);
 
 // Issues section: type → chip class. Anything not in this map renders
@@ -188,6 +188,16 @@ function renderSection(s: Section): string {
         return `<div class="alert-row ${cls}${primary}"><span class="dot"></span><span class="text">${renderInline(it)}</span></div>`;
       })
       .join("");
+  }
+  // 2026-05-23 — `notice` is `warn`'s prose-friendly sibling: instead
+  // of one alert-row per markdown line (which fragments long prose
+  // into a stack of red boxes), it renders the whole section body as
+  // ONE warn-styled box with paragraphs separated by blank lines. Use
+  // it for closure notes / standalone letters where the content is a
+  // multi-paragraph essay rather than a list of bullet alerts.
+  if (s.kind === "notice") {
+    const body = s.items.map(renderInline).join("<br><br>");
+    return `<div class="alert-row warn primary notice-block"><span class="dot"></span><span class="text">${body}</span></div>`;
   }
   if (s.kind === "issues") {
     // Per row: "type | level | desc"  OR  "type | desc" (level skipped).

@@ -1,5 +1,5 @@
 import { render } from "preact";
-import { useEffect, useState, useCallback, useRef } from "preact/compat";
+import { useEffect, useState, useCallback, useMemo, useRef } from "preact/compat";
 import OBR from "@owlbear-rodeo/sdk";
 import { installDebugOverlay } from "../../utils/debugOverlay";
 import { installPanelZoom } from "../../utils/panelZoom";
@@ -10,6 +10,15 @@ import { t } from "../../i18n";
 import { getLocalLang, onLangChange, startSceneSync, refreshFromScene, getState, setState, onStateChange } from "../../state";
 import { bindPanelDrag } from "../../utils/panelDrag";
 import { PANEL_IDS } from "../../utils/panelLayout";
+import {
+  DEFAULT_TRANSFORM_POLICY,
+  TRANSFORM_POLICY_KEY,
+  normalizeTransformHpMode,
+  normalizeTransformPolicy,
+  transformPolicyAllowsMonster,
+  type TransformHpMode,
+  type TransformPolicy,
+} from "../transform/shared";
 import "./styles.css";
 
 // Drag-spawn broadcast IDs. Mirrored in:
@@ -57,6 +66,30 @@ const PICKER_IS_GROUP = PICKER_TARGET_ITEM_IDS.length > 1;
 // it (revertible). Reuses the whole monster-search UI for free.
 const TRANSFORM_TARGET_ITEM_ID = URL_PARAMS.get("transformForItemId") || null;
 const BC_TRANSFORM_PICK = "com.obr-suite/transform:pick";
+
+function formatCrRange(policy: TransformPolicy, lang: "zh" | "en"): string {
+  const parts: string[] = [];
+  if (policy.typeQuery) {
+    parts.push(lang === "zh" ? `类型：${policy.typeQuery}` : `Type: ${policy.typeQuery}`);
+  }
+  if (policy.minCr !== null || policy.maxCr !== null) {
+    if (policy.minCr !== null && policy.maxCr !== null) {
+      parts.push(`CR ${policy.minCr}-${policy.maxCr}`);
+    } else if (policy.maxCr !== null) {
+      parts.push(lang === "zh" ? `CR ${policy.maxCr} 以下` : `CR up to ${policy.maxCr}`);
+    } else if (policy.minCr !== null) {
+      parts.push(lang === "zh" ? `CR ${policy.minCr} 以上` : `CR ${policy.minCr}+`);
+    }
+  }
+  return parts.join(" · ") || (lang === "zh" ? "全部怪物" : "All monsters");
+}
+
+function numberOrNull(value: string): number | null {
+  const text = value.trim();
+  if (!text) return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? Math.max(0, n) : null;
+}
 
 async function ensureSharedMonsterData(slug: string, raw: any): Promise<void> {
   if (!raw) return;
@@ -208,6 +241,7 @@ const readLS = (k: string, d: string) => {
 const writeLS = (k: string, v: string) => {
   try { localStorage.setItem(LS_PREFIX + k, v); } catch {}
 };
+const LS_TRANSFORM_HP_MODE = "transformHpMode";
 
 // Suite state lives in scene metadata under "com.obr-suite/state". When the
 // suite is installed, its Settings panel writes dataVersion ("2014" / "2024"
@@ -248,9 +282,21 @@ function App() {
   const [sourceFilter, setSourceFilter] = useState(() => readLS("sourceFilter", ""));
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<"GM" | "PLAYER">("PLAYER");
+  const [playerId, setPlayerId] = useState("");
   // Edition gate now flows from suite scene metadata (via dataVersion).
   const [dataVersion, setDataVersion] = useState<SuiteDataVersion>("all");
   const [lang, setLang] = useState(_lang);
+  const [transformPolicy, setTransformPolicy] = useState<TransformPolicy>(() => ({
+    ...DEFAULT_TRANSFORM_POLICY,
+  }));
+  const [transformAccess, setTransformAccess] = useState<"loading" | "allowed" | "denied">(
+    TRANSFORM_TARGET_ITEM_ID ? "loading" : "allowed",
+  );
+  const [transformTargetName, setTransformTargetName] = useState("");
+  const [transformSaving, setTransformSaving] = useState(false);
+  const [transformHpMode, setTransformHpMode] = useState<TransformHpMode>(() =>
+    normalizeTransformHpMode(readLS(LS_TRANSFORM_HP_MODE, "monster")),
+  );
   // Auto-add-to-initiative toggle — moved from Settings → 怪物图鉴 into
   // this popover so the GM can flip it inline while spawning. Mirrors
   // suite state via startSceneSync; the spawn pipeline reads from
@@ -273,6 +319,56 @@ function App() {
   const [autoName, setAutoName] = useState<boolean>(() =>
     getState().bestiaryAutoName === true,
   );
+
+  useEffect(() => {
+    if (!TRANSFORM_TARGET_ITEM_ID) return;
+    let alive = true;
+    let unsubItems: (() => void) | undefined;
+    let unsubPlayer: (() => void) | undefined;
+
+    const refreshTransformAccess = async () => {
+      try {
+        const [nextRole, nextPlayerId, items] = await Promise.all([
+          OBR.player.getRole().catch(() => "PLAYER" as const),
+          OBR.player.getId().catch(() => ""),
+          OBR.scene.items.getItems([TRANSFORM_TARGET_ITEM_ID]),
+        ]);
+        if (!alive) return;
+        const item = items[0] as any;
+        const policy = normalizeTransformPolicy(item?.metadata?.[TRANSFORM_POLICY_KEY]);
+        const owns = !!(nextPlayerId && item?.createdUserId === nextPlayerId);
+        setRole(nextRole as "GM" | "PLAYER");
+        setPlayerId(nextPlayerId);
+        setTransformPolicy(policy);
+        setTransformTargetName(String(item?.name ?? ""));
+        setTransformAccess(nextRole === "GM" || (owns && policy.enabled) ? "allowed" : "denied");
+      } catch (e) {
+        console.warn("[bestiary] transform access refresh failed", e);
+        if (alive) setTransformAccess("denied");
+      }
+    };
+
+    void refreshTransformAccess();
+    try {
+      unsubItems = OBR.scene.items.onChange(() => {
+        void refreshTransformAccess();
+      });
+    } catch {}
+    try {
+      unsubPlayer = OBR.player.onChange((p) => {
+        if (p.id) setPlayerId(p.id);
+        if (p.role) setRole(p.role as "GM" | "PLAYER");
+        void refreshTransformAccess();
+      });
+    } catch {}
+
+    return () => {
+      alive = false;
+      try { unsubItems?.(); } catch {}
+      try { unsubPlayer?.(); } catch {}
+    };
+  }, []);
+
   useEffect(() => {
     const unsub = onStateChange(() => {
       setAutoInit(getState().bestiaryAutoInitiative !== false);
@@ -324,6 +420,7 @@ function App() {
 
   useEffect(() => {
     OBR.player.getRole().then(setRole);
+    OBR.player.getId().then(setPlayerId).catch(() => {});
     readSuiteDataVersion().then(setDataVersion);
     const unsub = onStateChange((s) => setDataVersion(s.dataVersion));
 
@@ -359,18 +456,26 @@ function App() {
   }, []);
 
   const editions = dvToEditionSet(dataVersion);
+  const visibleMonsters = useMemo(() => {
+    if (!TRANSFORM_TARGET_ITEM_ID || role === "GM") return monsters;
+    if (transformAccess !== "allowed") return [];
+    return monsters.filter((mon) => transformPolicyAllowsMonster(transformPolicy, mon));
+  }, [monsters, role, transformAccess, transformPolicy]);
 
   // Re-filter when the data version changes (suite settings flipped).
   useEffect(() => {
-    if (monsters.length === 0) return;
-    setFiltered(searchMonsters(monsters, query, sortDesc, dvToEditionSet(dataVersion), sourceFilter));
-  }, [dataVersion, monsters, sourceFilter]);
+    if (monsters.length === 0) {
+      setFiltered([]);
+      return;
+    }
+    setFiltered(searchMonsters(visibleMonsters, query, sortDesc, dvToEditionSet(dataVersion), sourceFilter));
+  }, [dataVersion, monsters, visibleMonsters, query, sortDesc, sourceFilter]);
 
   const doSearch = useCallback(
     (q: string, desc: boolean, eds: Set<MonsterEdition>, src: string) => {
-      setFiltered(searchMonsters(monsters, q, desc, eds, src));
+      setFiltered(searchMonsters(visibleMonsters, q, desc, eds, src));
     },
-    [monsters]
+    [visibleMonsters]
   );
 
   const handleSearch = useCallback(
@@ -406,6 +511,47 @@ function App() {
     doSearch(query, newDesc, editions, sourceFilter);
   }, [sortDesc, query, doSearch, editions, sourceFilter]);
 
+  const saveTransformPolicy = useCallback(async (nextPolicy: TransformPolicy) => {
+    if (!TRANSFORM_TARGET_ITEM_ID || role !== "GM") return;
+    const clean = normalizeTransformPolicy(nextPolicy);
+    setTransformSaving(true);
+    try {
+      await OBR.scene.items.updateItems([TRANSFORM_TARGET_ITEM_ID], (drafts) => {
+        for (const d of drafts) {
+          if (clean.enabled) {
+            (d.metadata as any)[TRANSFORM_POLICY_KEY] = clean;
+          } else {
+            delete (d.metadata as any)[TRANSFORM_POLICY_KEY];
+          }
+        }
+      });
+      setTransformPolicy(clean);
+      try {
+        await OBR.notification.show(
+          clean.enabled
+            ? (lang === "zh" ? "已保存变身授权" : "Transform permission saved")
+            : (lang === "zh" ? "已关闭变身授权" : "Transform permission disabled"),
+          "SUCCESS",
+        );
+      } catch {}
+    } catch (e) {
+      console.error("[bestiary] save transform policy failed", e);
+      try {
+        await OBR.notification.show(
+          lang === "zh" ? "保存变身授权失败" : "Failed to save transform permission",
+          "ERROR",
+        );
+      } catch {}
+    } finally {
+      setTransformSaving(false);
+    }
+  }, [role, lang]);
+
+  const chooseTransformHpMode = useCallback((mode: TransformHpMode) => {
+    setTransformHpMode(mode);
+    writeLS(LS_TRANSFORM_HP_MODE, mode);
+  }, []);
+
   // 2014/2024 toggle buttons removed — versioning is centrally controlled
   // from the suite Settings panel (dataVersion in scene metadata).
 
@@ -413,15 +559,43 @@ function App() {
     if (TRANSFORM_TARGET_ITEM_ID) {
       // 变身 mode — hand the monster's token image + size to the
       // transform module (it snapshots the token, swaps, and closes
-      // this picker). No bind, no spawn.
+      // this picker). It also receives bestiary slug + HP/AC metadata
+      // so the transformed token is bound like a spawned monster.
+      if (role !== "GM" && !transformPolicyAllowsMonster(transformPolicy, mon)) {
+        try {
+          await OBR.notification.show(
+            lang === "zh" ? "该形态不在 DM 授权范围内" : "That form is outside the DM-approved range",
+            "WARNING",
+          );
+        } catch {}
+        return;
+      }
+      if (!mon.tokenUrl) {
+        try {
+          await OBR.notification.show(
+            lang === "zh" ? "该怪物没有可用 token 图片" : "This monster has no token image",
+            "WARNING",
+          );
+        } catch {}
+        return;
+      }
+      const slug = makeSlug(mon.source, mon.engName);
+      await ensureSharedMonsterData(slug, getRawMonster(slug));
       try {
         await OBR.broadcast.sendMessage(
           BC_TRANSFORM_PICK,
           {
             itemId: TRANSFORM_TARGET_ITEM_ID,
-            tokenUrl: mon.tokenUrl || "",
+            tokenUrl: mon.tokenUrl,
             size: mon.size || "",
             name: mon.name || mon.engName || "变身形态",
+            bestiarySlug: slug,
+            hp: mon.hp,
+            ac: mon.ac,
+            dexMod: mon.dexMod,
+            hpMode: transformHpMode,
+            type: mon.type,
+            cr: mon.cr,
           },
           { destination: "LOCAL" },
         );
@@ -438,7 +612,7 @@ function App() {
     } else {
       await spawnMonster(mon);
     }
-  }, []);
+  }, [role, transformPolicy, transformHpMode, lang]);
 
   // Drag-spawn DROP handler. The monster-drag-preview modal broadcasts
   // BC_MONSTER_DROP with the slug + scene-coord drop position; we
@@ -504,14 +678,6 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (role !== "GM") {
-    return (
-      <div class="app">
-        <div class="empty">{t(lang, "bestiaryPanelOnlyDM")}</div>
-      </div>
-    );
-  }
-
   const handleClearSearch = useCallback(() => {
     setQuery("");
     writeLS("query", "");
@@ -519,20 +685,167 @@ function App() {
     inputRef.current?.focus();
   }, [doSearch, sortDesc, editions, sourceFilter]);
 
-  // "About" button removed — the suite About panel covers all modules.
-
   // Drag grip — sits inline inside .header-top before the search input.
   // Skipped while in picker mode (popover is a transient single-shot,
   // no value to drag).
   const dragHandleRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = dragHandleRef.current;
-    if (!el || PICKER_TARGET_ITEM) return;
+    if (!el || PICKER_TARGET_ITEM || TRANSFORM_TARGET_ITEM_ID) return;
     return bindPanelDrag(el, PANEL_IDS.bestiaryPanel);
   }, []);
 
+  if (TRANSFORM_TARGET_ITEM_ID && transformAccess === "loading") {
+    return (
+      <div class="app">
+        <div class="empty">{t(lang, "bestiaryLoading")}</div>
+      </div>
+    );
+  }
+
+  if (TRANSFORM_TARGET_ITEM_ID && transformAccess === "denied") {
+    return (
+      <div class="app">
+        <div class="empty">
+          {lang === "zh"
+            ? "这个 token 尚未为你开启变身权限。"
+            : "Transform permission has not been enabled for you on this token."}
+        </div>
+      </div>
+    );
+  }
+
+  if (role !== "GM" && !TRANSFORM_TARGET_ITEM_ID) {
+    return (
+      <div class="app">
+        <div class="empty">{t(lang, "bestiaryPanelOnlyDM")}</div>
+      </div>
+    );
+  }
+
+  // "About" button removed — the suite About panel covers all modules.
+
   return (
     <div class="app">
+      {TRANSFORM_TARGET_ITEM_ID && (
+        <div class="transform-policy">
+          <div class="transform-policy-title">
+            <span>
+              {lang === "zh" ? "变身" : "Transform"}
+              {transformTargetName ? ` · ${transformTargetName}` : ""}
+            </span>
+            {role !== "GM" && (
+              <span class="transform-policy-chip">
+                {formatCrRange(transformPolicy, lang)}
+              </span>
+            )}
+          </div>
+          <div
+            class="transform-hp-mode"
+            role="group"
+            aria-label={lang === "zh" ? "血量计算方式" : "HP mode"}
+          >
+            <span class="transform-hp-mode-label">
+              {lang === "zh" ? "血量" : "HP"}
+            </span>
+            <button
+              class={`transform-hp-mode-btn ${transformHpMode === "monster" ? "on" : ""}`}
+              type="button"
+              onClick={() => chooseTransformHpMode("monster")}
+              aria-pressed={transformHpMode === "monster"}
+              title={lang === "zh"
+                ? "独立计算：变身期间使用图鉴怪物 HP；解除变身时恢复原本角色卡 HP"
+                : "Independent: use the monster HP while transformed; revert restores the previous character-card HP"}
+            >
+              {lang === "zh" ? "独立计算" : "Monster HP"}
+            </button>
+            <button
+              class={`transform-hp-mode-btn ${transformHpMode === "card" ? "on" : ""}`}
+              type="button"
+              onClick={() => chooseTransformHpMode("card")}
+              aria-pressed={transformHpMode === "card"}
+              title={lang === "zh"
+                ? "以角色卡为准：绑定角色卡时保留角色卡 HP，忽略怪物 HP；没有角色卡时自动使用怪物 HP"
+                : "Character card: keep card HP when a card is bound and ignore monster HP; falls back to monster HP without a card"}
+            >
+              {lang === "zh" ? "角色卡为准" : "Card HP"}
+            </button>
+          </div>
+          {role === "GM" ? (
+            <div class="transform-policy-controls">
+              <button
+                class={`auto-init-toggle ${transformPolicy.enabled ? "on" : "off"}`}
+                type="button"
+                onClick={() => setTransformPolicy({
+                  ...transformPolicy,
+                  enabled: !transformPolicy.enabled,
+                })}
+                aria-pressed={transformPolicy.enabled}
+                title={lang === "zh"
+                  ? "开启后，该 token 的 Owner 玩家可在右键菜单中使用变身"
+                  : "When on, this token's owner can use Transform from the context menu"}
+              >
+                {lang === "zh" ? "授权玩家" : "Owner access"}
+              </button>
+              <input
+                class="transform-policy-input transform-policy-type"
+                type="text"
+                value={transformPolicy.typeQuery}
+                placeholder={lang === "zh" ? "类型：野兽" : "Type: beast"}
+                onInput={(e) => setTransformPolicy({
+                  ...transformPolicy,
+                  typeQuery: (e.currentTarget as HTMLInputElement).value,
+                })}
+              />
+              <input
+                class="transform-policy-input transform-policy-cr"
+                type="number"
+                min="0"
+                step="0.125"
+                value={transformPolicy.minCr ?? ""}
+                placeholder={lang === "zh" ? "最低CR" : "Min CR"}
+                onInput={(e) => setTransformPolicy({
+                  ...transformPolicy,
+                  minCr: numberOrNull((e.currentTarget as HTMLInputElement).value),
+                })}
+              />
+              <input
+                class="transform-policy-input transform-policy-cr"
+                type="number"
+                min="0"
+                step="0.125"
+                value={transformPolicy.maxCr ?? ""}
+                placeholder={lang === "zh" ? "最高CR" : "Max CR"}
+                onInput={(e) => setTransformPolicy({
+                  ...transformPolicy,
+                  maxCr: numberOrNull((e.currentTarget as HTMLInputElement).value),
+                })}
+              />
+              <button
+                class="sort-btn transform-policy-save"
+                type="button"
+                disabled={transformSaving}
+                onClick={() => void saveTransformPolicy(transformPolicy)}
+              >
+                {transformSaving ? (lang === "zh" ? "保存中" : "Saving") : (lang === "zh" ? "保存" : "Save")}
+              </button>
+              <button
+                class="sort-btn transform-policy-save"
+                type="button"
+                disabled={transformSaving}
+                onClick={() => void saveTransformPolicy({ ...DEFAULT_TRANSFORM_POLICY })}
+              >
+                {lang === "zh" ? "关闭" : "Disable"}
+              </button>
+            </div>
+          ) : (
+            <div class="transform-policy-note">
+              {lang === "zh" ? "可选择范围：" : "Available forms: "}
+              {formatCrRange(transformPolicy, lang)}
+            </div>
+          )}
+        </div>
+      )}
       {PICKER_TARGET_ITEM && (
         <div
           style="background:rgba(93,173,226,0.18);border-bottom:1px solid rgba(93,173,226,0.40);padding:8px 14px;font-size:12px;color:#7ec8f0;font-weight:600;text-align:center;"
@@ -549,7 +862,7 @@ function App() {
       )}
       <div class="header">
         <div class="header-top">
-          {!PICKER_TARGET_ITEM && (
+          {!PICKER_TARGET_ITEM && !TRANSFORM_TARGET_ITEM_ID && (
             <div
               ref={dragHandleRef}
               class="drag-handle"
@@ -571,7 +884,7 @@ function App() {
               libraries disabled / empty), monsters.length === 0 and
               the bar would just be a no-op input. Per user spec:
               "有新数据时搜索框也要启用，无数据时搜索框也要消失". */}
-          {monsters.length > 0 && (
+          {visibleMonsters.length > 0 && (
             <div class="search-wrap">
               <input
                 ref={inputRef}
@@ -597,9 +910,9 @@ function App() {
         </div>
         <div class="header-row">
           <span class="count">
-            {loading ? t(lang, "bestiaryLoading") : `${filtered.length} / ${monsters.length}`}
+            {loading ? t(lang, "bestiaryLoading") : `${filtered.length} / ${visibleMonsters.length}`}
           </span>
-          {monsters.length > 0 && (
+          {visibleMonsters.length > 0 && (
           <div class="source-filter-wrap">
             <input
               type="text"
@@ -623,7 +936,7 @@ function App() {
             )}
           </div>
           )}
-          {role === "GM" && (
+          {role === "GM" && !TRANSFORM_TARGET_ITEM_ID && (
             <button
               class={`auto-init-toggle ${autoHide ? "on" : "off"}`}
               onClick={async () => {
@@ -637,7 +950,7 @@ function App() {
               {lang === "zh" ? "自动隐藏" : "Auto-hide"}
             </button>
           )}
-          {role === "GM" && (
+          {role === "GM" && !TRANSFORM_TARGET_ITEM_ID && (
             <button
               class={`auto-init-toggle ${autoInit ? "on" : "off"}`}
               onClick={async () => {
@@ -651,7 +964,7 @@ function App() {
               {lang === "zh" ? "自动先攻" : "Auto-init"}
             </button>
           )}
-          {role === "GM" && (
+          {role === "GM" && !TRANSFORM_TARGET_ITEM_ID && (
             <button
               class={`auto-init-toggle ${autoName ? "on" : "off"}`}
               onClick={async () => {

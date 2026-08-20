@@ -3,7 +3,7 @@ import { useEffect, useState, useMemo, useCallback, useContext } from "preact/ho
 import OBR from "@owlbear-rodeo/sdk";
 import { fireQuickRoll } from "../dice/tags";
 import { subscribeToSfx } from "../dice/sfx-broadcast";
-import { patchBubbles } from "../../utils/statEdit";
+import { patchBubbles, type BubblesData } from "../../utils/statEdit";
 import { normalizeCombatGearFlags, readBooleanFlag } from "./data-normalize";
 import { reconcileUploadedCardShieldState } from "./xlsx-shield-state";
 import { t, type Language } from "../../i18n";
@@ -25,6 +25,22 @@ const T = (k: Parameters<typeof t>[1]) => t(_lang, k);
 // currently-open card. Used by the StatsBanner edit handlers to push
 // HP / AC changes through to the bubbles plugin.
 const BIND_META_KEY = "com.character-cards/boundCardId";
+const TRANSFORM_STACK_KEY = "com.obr-suite/transform:stack";
+
+function usesIndependentTransformHp(item: any): boolean {
+  const stack = item?.metadata?.[TRANSFORM_STACK_KEY];
+  if (!Array.isArray(stack) || stack.length === 0) return false;
+  const top = stack[stack.length - 1] as { appliedHpMode?: unknown } | undefined;
+  return top?.appliedHpMode !== "card";
+}
+
+function withoutHpPatch(patch: Partial<BubblesData>): Partial<BubblesData> {
+  const next: Partial<BubblesData> = { ...patch };
+  delete next.health;
+  delete next["max health"];
+  delete next["temporary health"];
+  return next;
+}
 
 // 2026-05-14 (#14 f2) — inline SVG glyphs for the 复制 / 粘贴 micro
 // sub-buttons. `currentColor` so they inherit the button text colour
@@ -319,6 +335,7 @@ function downloadJson(filename: string, data: any) {
 // ===== Subcomponents =========================================
 function Header({
   data, onExport, onCopyJson, onImport, onPasteJson, onRefresh, editing, onToggleEditing, onSaveEdits, savingEdits,
+  previewBadge,
 }: {
   data: CharacterData;
   onExport: () => void;
@@ -330,6 +347,11 @@ function Header({
   onToggleEditing: () => void;
   onSaveEdits: () => void;
   savingEdits: boolean;
+  /** When set, the header renders in read-only preview mode: edit /
+   *  refresh / import-JSON buttons are hidden, and the badge text is
+   *  shown as a non-clickable chip in the head-meta row. Export +
+   *  copy stay available (those don't mutate any state). */
+  previewBadge?: string;
 }) {
   const id = data.identity || {};
   const cs = data.core_stats || {};
@@ -353,6 +375,18 @@ function Header({
           {englishName && <span class="en">{englishName}</span>}
         </div>
         <div class="cc-head-meta">
+          {/* 2026-05-26 — preview-mode read-only badge. Matches the
+              existing .pip chip style so it sits naturally in the row;
+              warm accent color + cursor:default to signal "this is a
+              status label, not a clickable filter". */}
+          {previewBadge && (
+            <span class="pip" style={{
+              cursor: "default",
+              background: "linear-gradient(180deg, rgba(245,166,35,0.20), rgba(245,166,35,0.08))",
+              borderColor: "rgba(245,166,35,0.55)",
+              color: "#f5c876",
+            }}><b>{previewBadge}</b></span>
+          )}
           <span class="pip"><b>{race}</b></span>
           <span class="pip"><b>{cls}</b></span>
           <span class="pip">{T("ccTotalLevel")} <b>{totalLv}</b></span>
@@ -366,18 +400,21 @@ function Header({
             below renders its editable variant: stat cells become inputs,
             list sections sprout + / × buttons, text blocks become
             textareas. Saved live through the same onPatch pipeline
-            that already handles inline HP/AC edits. */}
-        <button
-          class={`cc-btn ${editing ? "primary" : ""}`}
-          onClick={onToggleEditing}
-          title={editing ? T("ccEditTitleOn") : T("ccEditTitleOff")}>
-          <span class="ic">{editing ? "✎" : "🔧"}</span>{editing ? T("ccEditingLabel") : T("ccEditLabel")}
-        </button>
+            that already handles inline HP/AC edits.
+            2026-05-26 — hidden in preview mode (read-only). */}
+        {!previewBadge && (
+          <button
+            class={`cc-btn ${editing ? "primary" : ""}`}
+            onClick={onToggleEditing}
+            title={editing ? T("ccEditTitleOn") : T("ccEditTitleOff")}>
+            <span class="ic">{editing ? "✎" : "🔧"}</span>{editing ? T("ccEditingLabel") : T("ccEditLabel")}
+          </button>
+        )}
         {/* Save button — only visible in edit mode. Persists the
             current local data to the server via the same PUT endpoint
             JSON import uses, then broadcasts BC_CARD_UPDATED so bound
             tokens + other clients refresh. */}
-        {editing && (
+        {!previewBadge && editing && (
           <button
             class="cc-btn primary"
             onClick={onSaveEdits}
@@ -386,13 +423,17 @@ function Header({
             <span class="ic">💾</span>{savingEdits ? T("ccSaving") : T("ccSaveBtn")}
           </button>
         )}
-        <button class="cc-btn" onClick={onRefresh} title={T("ccRefreshTitle")}>
-          {T("ccRefresh")}
-        </button>
+        {!previewBadge && (
+          <button class="cc-btn" onClick={onRefresh} title={T("ccRefreshTitle")}>
+            {T("ccRefresh")}
+          </button>
+        )}
         {/* 2026-05-14 (#14 f2) — 导出 JSON + 仅复制 fused into one
             button group. 复制 is now a borderless icon-only sub-button
             seamlessly joined to the right edge of 导出 JSON (shared
-            border, no gap). SVG icon, no emoji / text. */}
+            border, no gap). SVG icon, no emoji / text.
+            Export + copy STAY in preview mode (they don't mutate
+            anything; the user might want to copy the example JSON). */}
         <div class="cc-btn-group">
           <button class="cc-btn" onClick={onExport} title={T("ccExportTitle")}>
             {T("ccExportJson")}
@@ -401,15 +442,19 @@ function Header({
             <span class="ic" dangerouslySetInnerHTML={{ __html: ICON_COPY }} />
           </button>
         </div>
-        {/* 导入 JSON + 仅粘贴 fused the same way. */}
-        <div class="cc-btn-group">
-          <button class="cc-btn" onClick={onImport} title={T("ccImportTitle")}>
-            {T("ccImportJson")}
-          </button>
-          <button class="cc-btn cc-btn-sub" onClick={onPasteJson} title={T("ccPasteTitle")}>
-            <span class="ic" dangerouslySetInnerHTML={{ __html: ICON_PASTE }} />
-          </button>
-        </div>
+        {/* 导入 JSON + 仅粘贴 fused the same way.
+            2026-05-26 — hidden in preview mode (would imply persisting
+            to a card, which the transient preview doesn't have). */}
+        {!previewBadge && (
+          <div class="cc-btn-group">
+            <button class="cc-btn" onClick={onImport} title={T("ccImportTitle")}>
+              {T("ccImportJson")}
+            </button>
+            <button class="cc-btn cc-btn-sub" onClick={onPasteJson} title={T("ccPasteTitle")}>
+              <span class="ic" dangerouslySetInnerHTML={{ __html: ICON_PASTE }} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1995,8 +2040,35 @@ function App() {
   useEffect(() => onLangChange((l) => setLang((l as Language) ?? "zh")), []);
   const roomId = getQS("room") || "";
   const cardId = getQS("card") || "";
+  // 2026-05-26 — preview mode. When `?preview=sample|paste` is in the
+  // URL, the page reads a JSON payload from localStorage (set by
+  // panel-page.ts before opening the modal) instead of fetching from
+  // the server. The card renders read-only: header hides edit /
+  // refresh / import buttons and shows a 中文示例 / 粘贴预览 badge.
+  // Nothing persists — the preview is purely client-side.
+  const previewMode = (getQS("preview") as "sample" | "paste" | null) || null;
+  const isPreview = previewMode === "sample" || previewMode === "paste";
 
   const loadData = useCallback(async () => {
+    if (isPreview) {
+      try {
+        const raw = localStorage.getItem("obr-suite/cc-preview-payload");
+        if (!raw) {
+          setError(T("ccPreviewMissingPayload"));
+          return;
+        }
+        const wrap = JSON.parse(raw);
+        if (!wrap || typeof wrap !== "object" || !wrap.json) {
+          setError(T("ccPreviewMissingPayload"));
+          return;
+        }
+        setError(null);
+        setData(normalizeCombatGearFlags(wrap.json));
+      } catch (e: any) {
+        setError(`${T("ccLoadFailedPrefix")}${e?.message || String(e)}`);
+      }
+      return;
+    }
     if (!roomId || !cardId) {
       setError(T("ccErrNoParams"));
       return;
@@ -2013,7 +2085,7 @@ function App() {
     } catch (e: any) {
       setError(`${T("ccLoadFailedPrefix")}${e?.message || String(e)}`);
     }
-  }, [roomId, cardId]);
+  }, [roomId, cardId, isPreview]);
 
   useEffect(() => { void loadData(); }, [loadData]);
 
@@ -2051,7 +2123,7 @@ function App() {
     // edits unrelated fields.
     const cs = (patch as any)?.core_stats;
     if (!cs || typeof cs !== "object") return;
-    const bubblesPatch: Record<string, unknown> = {};
+    const bubblesPatch: Partial<BubblesData> = {};
     if (cs.hp && typeof cs.hp === "object") {
       if (typeof cs.hp.current === "number") bubblesPatch["health"] = cs.hp.current;
       if (typeof cs.hp.max === "number")     bubblesPatch["max health"] = cs.hp.max;
@@ -2065,7 +2137,14 @@ function App() {
           (it: any) =>
             (it.metadata as Record<string, unknown> | undefined)?.[BIND_META_KEY] === cardId,
         );
-        await Promise.all(items.map((it) => patchBubbles(it.id, bubblesPatch)));
+        await Promise.all(items.map((it: any) => {
+          const patchForItem = usesIndependentTransformHp(it)
+            ? withoutHpPatch(bubblesPatch)
+            : bubblesPatch;
+          return Object.keys(patchForItem).length > 0
+            ? patchBubbles(it.id, patchForItem)
+            : Promise.resolve({});
+        }));
       } catch (e) {
         console.warn("[cc-fullscreen] bubbles propagate failed", e);
       }
@@ -2362,6 +2441,11 @@ function App() {
         editing={editing}
         onToggleEditing={() => setEditing((v) => !v)}
         savingEdits={savingEdits}
+        previewBadge={
+          previewMode === "sample" ? T("ccPreviewBadgeSample")
+          : previewMode === "paste" ? T("ccPreviewBadgePaste")
+          : undefined
+        }
         onSaveEdits={async () => {
           if (savingEdits || !data) return;
           setSavingEdits(true);

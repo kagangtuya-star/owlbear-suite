@@ -18,9 +18,9 @@
 // Pipeline on save:
 //   mask -> traceContours -> simplifyDP -> imagePxToWorld -> buildPath
 
-import OBR, { isImage, isPath, type Item } from "@owlbear-rodeo/sdk";
+import OBR, { isImage, isPath, buildPath, type Item } from "@owlbear-rodeo/sdk";
 import { getLocalLang } from "../../state";
-import { MODAL_ID, FOG_PATH_KEY, DEFAULT_PREFS, LS_PREFS } from "./types";
+import { MODAL_ID, FOG_PATH_KEY, FOG_MAP_KEY, DEFAULT_PREFS, LS_PREFS } from "./types";
 import type { ToolId, EditorPrefs, AlgorithmId, Vec2, ShapeToolId, ShapeMode } from "./types";
 import { toGray, thresholdMask, gaussBlur3, gaussBlur5 } from "./algorithms/grayscale";
 import { otsuMask } from "./algorithms/otsu";
@@ -89,6 +89,145 @@ let imgW = 0, imgH = 0;
 let imgRGBA: Uint8ClampedArray | null = null;
 /** Working mask, dimensions = image. 0/255 per pixel. */
 let mask: Uint8Array | null = null;
+
+/** 2026-05-26 (Phase C) — optional B&W reference image. The user's
+ *  workflow: feed the original map to an AI, get back a clean
+ *  high-contrast black-line-on-white "walls only" overlay, import
+ *  it here, and run the algorithms against the B&W instead of the
+ *  noisy original. The B&W is auto-resized to (imgW × imgH) so all
+ *  downstream code keeps working with the same pixel grid.
+ *  - bwImage: original-resolution HTMLImageElement for canvas
+ *    overlay rendering (shown semi-transparent over the original).
+ *  - bwRGBA: pre-resampled to imgW × imgH so runAlgorithm /
+ *    rebuildThreshold can treat it as a drop-in replacement for
+ *    imgRGBA.
+ *  - bwShow / bwOpacity: GM-side overlay controls (don't affect
+ *    algorithm input — only what's painted on the canvas). */
+let bwImage: HTMLImageElement | null = null;
+let bwRGBA: Uint8ClampedArray | null = null;
+let bwShow: boolean = true;
+let bwOpacity: number = 0.85;
+
+/** 2026-05-26 (Phase D) — door tool state.
+ *
+ *  Doors are two-point straight lines living in IMAGE-PIXEL space
+ *  (same coord system as `mask`). They are NOT in the mask — the
+ *  brush, eraser, lasso, algorithm apply, etc. all leave them
+ *  untouched. They render on top of everything as red (closed) or
+ *  green (open) lines. On save, each door becomes a tiny FOG-layer
+ *  Path with a `rodeo.owlbear.dynamic-fog/doors` metadata entry
+ *  covering ~100% of its length; the official dynamic-fog plugin
+ *  handles the rest (auto-deriving Wall items, slicing them when
+ *  open). The fullFog plugin-id keys below mark items so we can
+ *  re-hydrate doors[] on subsequent editor opens.
+ */
+type EditorDoor = {
+  id: string;
+  x1: number; y1: number;
+  x2: number; y2: number;
+  open: boolean;
+};
+let doors: EditorDoor[] = [];
+let selectedDoorId: string | null = null;
+type DoorDragKind = "endpoint1" | "endpoint2" | "whole";
+let doorDrag: {
+  kind: DoorDragKind;
+  doorId: string;
+  startImg: { x: number; y: number };
+  orig: EditorDoor;
+} | null = null;
+let doorPlacement: { x: number; y: number } | null = null;
+const DYNAMIC_FOG_DOORS_KEY = "rodeo.owlbear.dynamic-fog/doors";
+// Distinct kind for our own door persistence; reusable by the
+// loadExistingFog scanner to skip wall outlines vs doors.
+const FULLFOG_DOOR_KIND = "door";
+// Hit-test thresholds in screen pixels (converted to image px via
+// view.zoom at the call site).
+const DOOR_HANDLE_HIT_PX = 10;
+const DOOR_LINE_HIT_PX = 8;
+function newDoorId(): string {
+  return `door-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** 2026-05-26 (Phase D) — turn an editor door into the OBR Path item
+ *  that the official dynamic-fog plugin recognises. The Path:
+ *   - layer "FOG" so dynamic-fog's WallActor picks it up
+ *   - 2 commands (M, L) describing the door's straight line
+ *   - non-zero strokeWidth so the auto-derived Wall has thickness
+ *   - red (closed) / green (open) stroke as a fallback rendering for
+ *     users without dynamic-fog installed; with dynamic-fog, its
+ *     own DoorOverlayActor takes over the visual
+ *   - dynamic-fog door metadata covering the line from `eps` to
+ *     `length - eps` (i.e. ~100% of its length). When open,
+ *     WallActor subtracts the entire range → the resulting Wall is
+ *     ~empty (only the two sub-pixel stubs at the endpoints remain,
+ *     which dynamic-fog's path simplification typically drops). When
+ *     closed, the full segment renders as a wall.
+ *   - our own FOG_PATH_KEY / FOG_MAP_KEY / kind="door" metadata so
+ *     loadExistingFog can rehydrate the door[] array on re-open.
+ *  Returns null for zero-length doors (failsafe). */
+function buildDoorItem(
+  d: EditorDoor,
+  mapItem_: any,
+  sceneDpi: number,
+  bindToMap: boolean,
+): any | null {
+  const ml = imagePxToMapLocal([{ x: d.x1, y: d.y1 }, { x: d.x2, y: d.y2 }], mapItem_, sceneDpi);
+  const p1 = ml[0], p2 = ml[1];
+  const length = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  if (length < 0.5) return null;
+  // Tiny epsilon so distance markers aren't at exact 0 / length
+  // (dynamic-fog hasn't been observed to care, but the safer choice
+  // mirrors how createDoorMode never lets endpoints sit on a
+  // contour seam).
+  const eps = Math.min(0.5, length * 0.005);
+
+  const commands = [
+    [Command.MOVE, p1.x, p1.y],
+    [Command.LINE, p2.x, p2.y],
+  ];
+
+  const mapId = mapItem_.id;
+  const pos = mapItem_.position ?? { x: 0, y: 0 };
+  const rot = mapItem_.rotation ?? 0;
+  const scl = mapItem_.scale ?? { x: 1, y: 1 };
+  const strokeW = Math.max(2, Math.round(sceneDpi / 30));
+
+  let b = buildPath()
+    .commands(commands as any)
+    .fillRule("nonzero")
+    .strokeColor(d.open ? "#5cd97c" : "#ff6b6b")
+    .strokeOpacity(0.9)
+    .strokeWidth(strokeW)
+    .fillOpacity(0)
+    .layer("FOG")
+    .position(pos)
+    .scale(scl)
+    .rotation(rot)
+    .visible(true)
+    .locked(bindToMap)
+    .disableHit(bindToMap)
+    .metadata({
+      [FOG_PATH_KEY]: true,
+      [FOG_PATH_KIND_KEY]: FULLFOG_DOOR_KIND,
+      [FOG_MAP_KEY]: {
+        mapId,
+        savedAt: Date.now(),
+        kind: FULLFOG_DOOR_KIND,
+        bindToMap,
+        doorId: d.id,
+      },
+      [DYNAMIC_FOG_DOORS_KEY]: [{
+        open: d.open,
+        start: { distance: eps, index: 0 },
+        end: { distance: length - eps, index: 0 },
+      }],
+    });
+  if (bindToMap) {
+    b = b.attachedTo(mapId).disableAttachmentBehavior(["VISIBLE", "COPY"]);
+  }
+  return b.build();
+}
 
 /** Mask overlay rendered as RGBA so the canvas can drawImage it
  *  directly — no per-pixel CPU loop on each redraw. Updated
@@ -247,7 +386,10 @@ async function loadExistingFog(): Promise<void> {
       const md = (it.metadata as any) ?? {};
       if (!md[FOG_PATH_KEY]) return false;
       const kind = md[FOG_PATH_KIND_KEY];
-      if (kind && kind !== "outline") return false;
+      // 2026-05-26 (Phase D) — accept "outline" walls AND "door"
+      // items. Doors get split off into the doors[] state below;
+      // outlines feed the mask rasteriser as before.
+      if (kind && kind !== "outline" && kind !== FULLFOG_DOOR_KIND) return false;
       if ((it as any).attachedTo !== mapItemId) return false;
       return true;
     });
@@ -262,6 +404,41 @@ async function loadExistingFog(): Promise<void> {
   const offX = mapItem.grid?.offset?.x ?? 0;
   const offY = mapItem.grid?.offset?.y ?? 0;
 
+  // 2026-05-26 (Phase D) — split items by kind: doors are rehydrated
+  // into the editor's doors[] state (NOT into the mask) so they
+  // remain separately editable; outline walls feed the rasteriser.
+  doors = [];
+  const outlineItems: Item[] = [];
+  for (const it of existing) {
+    const kind = ((it as any).metadata as any)?.[FOG_PATH_KIND_KEY];
+    if (kind === FULLFOG_DOOR_KIND) {
+      const commands = (it as any).commands;
+      if (!Array.isArray(commands) || commands.length < 2) continue;
+      // Door commands are [MOVE, x1, y1] + [LINE, x2, y2]. Pull
+      // endpoints (mapLocal) and invert to image-pixel coords.
+      const cm = commands[0], cl = commands[1];
+      if (!Array.isArray(cm) || !Array.isArray(cl)) continue;
+      const x1ml = Number(cm[1]), y1ml = Number(cm[2]);
+      const x2ml = Number(cl[1]), y2ml = Number(cl[2]);
+      if (![x1ml, y1ml, x2ml, y2ml].every((v) => Number.isFinite(v))) continue;
+      const md = ((it as any).metadata as any) ?? {};
+      const doorMd = md[DYNAMIC_FOG_DOORS_KEY];
+      const open = Array.isArray(doorMd) && doorMd[0] ? !!doorMd[0].open : false;
+      const fmm = md[FOG_MAP_KEY] ?? {};
+      const id = (typeof fmm.doorId === "string" && fmm.doorId) || newDoorId();
+      doors.push({
+        id,
+        x1: x1ml / ratio + offX, y1: y1ml / ratio + offY,
+        x2: x2ml / ratio + offX, y2: y2ml / ratio + offY,
+        open,
+      });
+    } else {
+      outlineItems.push(it);
+    }
+  }
+
+  if (outlineItems.length === 0) return;
+
   // Rasterise polygons via Canvas2D fill (evenodd rule matches the
   // save side, so multi-subpath holes stay holes). Then read pixels
   // back into the mask Uint8Array.
@@ -272,7 +449,7 @@ async function loadExistingFog(): Promise<void> {
   ctx.beginPath();
 
   let polyTotal = 0;
-  for (const item of existing) {
+  for (const item of outlineItems) {
     const commands = (item as any).commands;
     if (!Array.isArray(commands) || commands.length === 0) continue;
     const polylines = samplePathCommands(commands, 8);
@@ -444,6 +621,7 @@ const TOOL_LABELS: Record<ToolId, string> = en
       magicWand: "Wand",
       paintBucket: "Fill",
       picker: "Pick",
+      door: "Door",
     }
   : {
       pan: "拖动",
@@ -456,6 +634,7 @@ const TOOL_LABELS: Record<ToolId, string> = en
       magicWand: "魔棒",
       paintBucket: "油漆",
       picker: "取色",
+      door: "门",
     };
 
 function currentModeLabel(): string {
@@ -513,6 +692,19 @@ function redraw(): void {
     ctx2d.drawImage(thresholdLayer as any, 0, 0);
   } else {
     ctx2d.drawImage(mapImage as any, 0, 0);
+    // 2026-05-26 (Phase C) — B&W reference overlay. Drawn between
+    // the original bitmap and the orange mask so the GM can compare
+    // line work side-by-side: tweak opacity slider to fade between
+    // "see the map underneath" and "trust the B&W alignment". The
+    // overlay is purely visual feedback — it doesn't reflect what
+    // the algorithm processes (that's bwRGBA, resampled to image
+    // dimensions; the canvas-side bwImage may have its native size).
+    if (bwImage && bwShow) {
+      ctx2d.save();
+      ctx2d.globalAlpha = bwOpacity;
+      ctx2d.drawImage(bwImage, 0, 0, imgW, imgH);
+      ctx2d.restore();
+    }
     if (maskLayer) ctx2d.drawImage(maskLayer as any, 0, 0);
   }
 
@@ -570,7 +762,168 @@ function redraw(): void {
     ctx2d.lineTo(lastImgPt.x, lastImgPt.y);
     ctx2d.stroke();
   }
+
+  // 2026-05-26 (Phase D) — door rendering. Doors live on top of
+  // everything else so they're always visible regardless of mask
+  // / threshold overlay. Color = red (closed) / green (open). Line
+  // width scales with zoom so doors stay visually consistent at
+  // any magnification. Selected door gets endpoint handles for
+  // grabbing. In door tool, all doors get a faint outer halo to
+  // signal "click-to-select" affordance.
+  if (doors.length > 0 || (tool === "door" && doorPlacement)) {
+    const doorMode = tool === "door";
+    const lineW = Math.max(1.5, 3 / view.zoom);
+    for (const d of doors) {
+      const isSelected = d.id === selectedDoorId;
+      // Outer halo in door tool for selectability cue.
+      if (doorMode && !isSelected) {
+        ctx2d.strokeStyle = "rgba(255,255,255,0.20)";
+        ctx2d.lineWidth = (lineW + 6) / 1;
+        ctx2d.lineCap = "round";
+        ctx2d.beginPath();
+        ctx2d.moveTo(d.x1, d.y1); ctx2d.lineTo(d.x2, d.y2);
+        ctx2d.stroke();
+      }
+      ctx2d.strokeStyle = d.open ? "#5cd97c" : "#ff6b6b";
+      ctx2d.lineWidth = lineW;
+      ctx2d.lineCap = "round";
+      ctx2d.beginPath();
+      ctx2d.moveTo(d.x1, d.y1); ctx2d.lineTo(d.x2, d.y2);
+      ctx2d.stroke();
+      // Endpoint handles only when door tool is active AND this
+      // door is selected (avoid clutter for unselected doors).
+      if (doorMode && isSelected) {
+        const r = Math.max(3, 6 / view.zoom);
+        ctx2d.fillStyle = "#ffffff";
+        ctx2d.strokeStyle = d.open ? "#5cd97c" : "#ff6b6b";
+        ctx2d.lineWidth = Math.max(1, 1.5 / view.zoom);
+        for (const [hx, hy] of [[d.x1, d.y1], [d.x2, d.y2]] as const) {
+          ctx2d.beginPath();
+          ctx2d.arc(hx, hy, r, 0, Math.PI * 2);
+          ctx2d.fill();
+          ctx2d.stroke();
+        }
+      }
+    }
+    // Placement preview: dashed line from the first click to current cursor.
+    if (doorMode && doorPlacement && lastImgPt) {
+      ctx2d.strokeStyle = "rgba(255,107,107,0.85)";
+      ctx2d.lineWidth = lineW;
+      ctx2d.setLineDash([8 / view.zoom, 6 / view.zoom]);
+      ctx2d.beginPath();
+      ctx2d.moveTo(doorPlacement.x, doorPlacement.y);
+      ctx2d.lineTo(lastImgPt.x, lastImgPt.y);
+      ctx2d.stroke();
+      ctx2d.setLineDash([]);
+      // Tiny marker at the first endpoint.
+      ctx2d.fillStyle = "#ff6b6b";
+      ctx2d.beginPath();
+      ctx2d.arc(doorPlacement.x, doorPlacement.y, Math.max(2, 4 / view.zoom), 0, Math.PI * 2);
+      ctx2d.fill();
+    }
+  }
+
   ctx2d.restore();
+}
+
+// --- Door tool: hit testing + helpers (Phase D) --------------------------
+
+function distPointToSegment(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): number {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-6) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
+/** Pick the door hit at the image-pixel point (ix, iy). Returns
+ *  `{door, kind}` where kind is "endpoint1" / "endpoint2" / "whole"
+ *  describing what the user actually clicked on. Only the currently
+ *  SELECTED door is endpoint-grabbable (handles are only drawn for
+ *  it). For other doors, a whole-line click selects them first. */
+function hitTestDoor(
+  ix: number, iy: number,
+): { door: EditorDoor; kind: DoorDragKind } | null {
+  const handleR = Math.max(DOOR_HANDLE_HIT_PX / view.zoom, 4);
+  const lineR = Math.max(DOOR_LINE_HIT_PX / view.zoom, 3);
+  // Prefer selected door endpoint hits (smaller, more precise grab).
+  if (selectedDoorId) {
+    const sel = doors.find((d) => d.id === selectedDoorId);
+    if (sel) {
+      const d1 = Math.hypot(ix - sel.x1, iy - sel.y1);
+      const d2 = Math.hypot(ix - sel.x2, iy - sel.y2);
+      if (d1 <= handleR && d1 <= d2) return { door: sel, kind: "endpoint1" };
+      if (d2 <= handleR) return { door: sel, kind: "endpoint2" };
+    }
+  }
+  // Then any door's line (iterate in reverse so most-recently-added
+  // wins on overlap).
+  for (let i = doors.length - 1; i >= 0; i--) {
+    const d = doors[i];
+    if (distPointToSegment(ix, iy, d.x1, d.y1, d.x2, d.y2) <= lineR) {
+      return { door: d, kind: "whole" };
+    }
+  }
+  return null;
+}
+
+/** Build + show a right-click context menu for a door. Positioned at
+ *  the click's screen coords; auto-closes on outside click / Esc. */
+function openDoorContextMenu(door: EditorDoor, screenX: number, screenY: number): void {
+  const existing = document.getElementById("ffDoorCtxMenu");
+  if (existing) existing.remove();
+  const menu = document.createElement("div");
+  menu.id = "ffDoorCtxMenu";
+  menu.style.cssText =
+    "position:fixed;z-index:10000;background:#161922;border:1px solid rgba(255,255,255,0.18);" +
+    "border-radius:6px;padding:4px;min-width:160px;color:#e6e8ee;font-size:13px;" +
+    "font-family:inherit;box-shadow:0 6px 18px rgba(0,0,0,0.45)";
+  // Clamp inside viewport.
+  const vw = window.innerWidth, vh = window.innerHeight;
+  menu.style.left = `${Math.min(screenX, vw - 180)}px`;
+  menu.style.top = `${Math.min(screenY, vh - 100)}px`;
+  function makeItem(label: string, onClick: () => void): HTMLDivElement {
+    const el = document.createElement("div");
+    el.textContent = label;
+    el.style.cssText =
+      "padding:7px 12px;border-radius:4px;cursor:pointer;transition:background .08s";
+    el.addEventListener("mouseenter", () => { el.style.background = "rgba(255,255,255,0.06)"; });
+    el.addEventListener("mouseleave", () => { el.style.background = ""; });
+    el.addEventListener("click", () => { onClick(); close(); });
+    return el;
+  }
+  const toggleLabel = door.open
+    ? (en ? "🔴 Close door" : "🔴 关上门")
+    : (en ? "🟢 Open door" : "🟢 打开门");
+  menu.appendChild(makeItem(toggleLabel, () => {
+    door.open = !door.open;
+    scheduleRedraw();
+  }));
+  menu.appendChild(makeItem(en ? "🗑 Delete door" : "🗑 删除门", () => {
+    doors = doors.filter((d) => d.id !== door.id);
+    if (selectedDoorId === door.id) selectedDoorId = null;
+    scheduleRedraw();
+  }));
+  const close = () => {
+    menu.remove();
+    document.removeEventListener("mousedown", outside, true);
+    document.removeEventListener("keydown", onEsc, true);
+  };
+  const outside = (e: MouseEvent) => {
+    if (!menu.contains(e.target as Node)) close();
+  };
+  const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+  setTimeout(() => {
+    document.addEventListener("mousedown", outside, true);
+    document.addEventListener("keydown", onEsc, true);
+  }, 0);
+  document.body.appendChild(menu);
 }
 
 // --- Brush cursor (custom outline circle) ---------------------------------
@@ -774,9 +1127,100 @@ function preFilter(rgba: Uint8ClampedArray): Uint8ClampedArray {
   return out;
 }
 
+/** Returns the RGBA buffer the algorithms should run against. When
+ *  the user has imported a B&W reference image, that takes priority
+ *  — the whole point is that the B&W gives the algorithms cleaner
+ *  input than the noisy original. Otherwise falls back to the
+ *  source map bitmap. (Phase C — 2026-05-26.) */
+function algoSourceRGBA(): Uint8ClampedArray | null {
+  return bwRGBA ?? imgRGBA;
+}
+
+/** Resize an HTMLImageElement / ImageBitmap onto an offscreen
+ *  canvas at exactly imgW × imgH and read back its RGBA bytes. Used
+ *  by the B&W reference import path so the resulting bwRGBA lines
+ *  up pixel-for-pixel with imgRGBA. A simple stretch resample is
+ *  fine here — the typical B&W input is already at the original's
+ *  dimensions, and even when not the algorithms are looking for
+ *  thresholdable contrast, not sub-pixel accuracy. */
+function resampleToImagePixels(src: CanvasImageSource): Uint8ClampedArray {
+  const oc = makeOffscreen(imgW, imgH);
+  const oct = (oc as any).getContext("2d") as CanvasRenderingContext2D;
+  oct.imageSmoothingEnabled = true;
+  // White background so any transparent areas in the B&W (alpha=0)
+  // read as background (white) rather than as black, which would
+  // get picked up as "wall" by Otsu / threshold algos.
+  oct.fillStyle = "#ffffff";
+  oct.fillRect(0, 0, imgW, imgH);
+  oct.drawImage(src, 0, 0, imgW, imgH);
+  return oct.getImageData(0, 0, imgW, imgH).data;
+}
+
+async function importBwImage(file: File): Promise<void> {
+  if (!imgW || !imgH) {
+    stInfo.textContent = en ? "Load a map first" : "请先打开地图";
+    return;
+  }
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(r.error ?? new Error("file read failed"));
+      r.readAsDataURL(file);
+    });
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error("image decode failed"));
+      im.src = dataUrl;
+    });
+    bwImage = img;
+    bwRGBA = resampleToImagePixels(img);
+    thresholdDirty = true;
+    syncBwUi();
+    scheduleRedraw();
+    stInfo.textContent = en
+      ? `B&W reference loaded (${img.naturalWidth}×${img.naturalHeight}, resampled to ${imgW}×${imgH})`
+      : `已加载黑白参考图（${img.naturalWidth}×${img.naturalHeight}，重采样到 ${imgW}×${imgH}）`;
+  } catch (e: any) {
+    stInfo.textContent = (en ? "B&W import failed: " : "黑白图导入失败：") + (e?.message ?? e);
+  }
+}
+
+function clearBwImage(): void {
+  bwImage = null;
+  bwRGBA = null;
+  thresholdDirty = true;
+  syncBwUi();
+  scheduleRedraw();
+  stInfo.textContent = en ? "B&W reference cleared" : "已清除黑白参考图";
+}
+
+/** Update the B&W controls' visible state — disables Show / opacity
+ *  / Clear when nothing is loaded, swaps button label to indicate
+ *  current state. Called whenever bwImage flips loaded↔unloaded. */
+function syncBwUi(): void {
+  const hasBw = !!bwImage;
+  const importBtn = document.getElementById("btn-bw-import") as HTMLButtonElement | null;
+  const clearBtn = document.getElementById("btn-bw-clear") as HTMLButtonElement | null;
+  const showCb = document.getElementById("bw-show") as HTMLInputElement | null;
+  const opSld = document.getElementById("bw-opacity") as HTMLInputElement | null;
+  const opVal = document.getElementById("bw-opacity-val");
+  if (clearBtn) clearBtn.disabled = !hasBw;
+  if (showCb) { showCb.disabled = !hasBw; showCb.checked = bwShow; }
+  if (opSld) { opSld.disabled = !hasBw; opSld.value = String(Math.round(bwOpacity * 100)); }
+  if (opVal) opVal.textContent = `${Math.round(bwOpacity * 100)}%`;
+  if (importBtn) {
+    importBtn.textContent = hasBw
+      ? (en ? "📂 Replace B&W" : "📂 替换黑白图")
+      : (en ? "📂 Import B&W" : "📂 导入黑白图");
+  }
+}
+
 function runAlgorithm(algo: AlgorithmId): Uint8Array {
-  if (!imgRGBA) throw new Error("no image");
-  const rgba = preFilter(imgRGBA);
+  const src = algoSourceRGBA();
+  if (!src) throw new Error("no image");
+  const rgba = preFilter(src);
   const gray = toGray(rgba, imgW, imgH);
   const p = prefs.params;
   switch (algo) {
@@ -790,7 +1234,7 @@ function runAlgorithm(algo: AlgorithmId): Uint8Array {
 }
 
 function applyAlgorithm(): void {
-  if (!mask || !imgRGBA) return;
+  if (!mask || !algoSourceRGBA()) return;
   pushUndo();
   let next = runAlgorithm(prefs.algorithm);
   // Thin-line filter runs IMMEDIATELY after the algorithm so user-
@@ -939,7 +1383,21 @@ function snapPoint(ix: number, iy: number): { x: number; y: number } {
   };
 }
 
-canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+// 2026-05-26 (Phase D) — right-click in door tool opens a per-door
+// context menu (toggle open/close, delete) instead of just being
+// suppressed. Outside door tool keeps the previous "just suppress"
+// behaviour so other tools' right-click semantics (e.g. erase) work.
+canvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  if (tool !== "door" || !mapImage) return;
+  const m = getMousePoint(e);
+  const hit = hitTestDoor(m.ix, m.iy);
+  if (hit) {
+    selectedDoorId = hit.door.id;
+    scheduleRedraw();
+    openDoorContextMenu(hit.door, e.clientX, e.clientY);
+  }
+});
 
 canvas.addEventListener("pointerdown", (e) => {
   if (!mask || !mapImage) return;
@@ -962,6 +1420,58 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   if (e.button !== 0) return;
+
+  // 2026-05-26 (Phase D) — door tool: NOT a mask-drawing operation.
+  // Click-1 sets first endpoint; click-2 commits a new door at
+  // (firstEndpoint → cursor). Clicking on an existing door's line
+  // selects + starts a whole-line drag; clicking on the selected
+  // door's endpoint handle drags just that endpoint. We bypass the
+  // generic `drawing=true / setPointerCapture` flow because doors
+  // don't write to the mask and the modal drag UX is different.
+  if (tool === "door") {
+    const hit = hitTestDoor(m.ix, m.iy);
+    if (hit) {
+      selectedDoorId = hit.door.id;
+      doorDrag = {
+        kind: hit.kind,
+        doorId: hit.door.id,
+        startImg: { x: m.ix, y: m.iy },
+        orig: { ...hit.door },
+      };
+      canvas.setPointerCapture(e.pointerId);
+      scheduleRedraw();
+      return;
+    }
+    // Empty-space click: placement flow.
+    if (!doorPlacement) {
+      // First click — remember start point, deselect any prior door.
+      doorPlacement = { x: m.ix, y: m.iy };
+      selectedDoorId = null;
+      scheduleRedraw();
+    } else {
+      // Second click — commit the door. Reject zero-length placements
+      // (silent return, leaves placement state so the next click can
+      // try again from the same start).
+      const dx = m.ix - doorPlacement.x, dy = m.iy - doorPlacement.y;
+      if (dx * dx + dy * dy >= 4) {
+        const d: EditorDoor = {
+          id: newDoorId(),
+          x1: doorPlacement.x, y1: doorPlacement.y,
+          x2: m.ix, y2: m.iy,
+          open: false,
+        };
+        doors.push(d);
+        selectedDoorId = d.id;
+        doorPlacement = null;
+        scheduleRedraw();
+        stInfo.textContent = en
+          ? `Door placed (${doors.length} total — red=closed; right-click to toggle/delete)`
+          : `已放置门（共 ${doors.length} 扇 — 红色=关；右键切换开关/删除）`;
+      }
+    }
+    return;
+  }
+
   drawing = true;
   canvas.setPointerCapture(e.pointerId);
 
@@ -1041,6 +1551,38 @@ canvas.addEventListener("pointermove", (e) => {
   const ix = snap.x, iy = snap.y;
   stPos.textContent = `${Math.round(ix)}, ${Math.round(iy)}`;
   updateBrushCursorAt(sx, sy);
+
+  // 2026-05-26 (Phase D) — door drag: move endpoint or whole line.
+  // Also keep lastImgPt fresh so the placement preview (dashed
+  // line from first endpoint to cursor) tracks the mouse.
+  if (tool === "door") {
+    lastImgPt = { x: m.ix, y: m.iy };
+    if (doorDrag) {
+      const door = doors.find((d) => d.id === doorDrag!.doorId);
+      if (door) {
+        const dx = m.ix - doorDrag.startImg.x;
+        const dy = m.iy - doorDrag.startImg.y;
+        if (doorDrag.kind === "endpoint1") {
+          door.x1 = doorDrag.orig.x1 + dx;
+          door.y1 = doorDrag.orig.y1 + dy;
+        } else if (doorDrag.kind === "endpoint2") {
+          door.x2 = doorDrag.orig.x2 + dx;
+          door.y2 = doorDrag.orig.y2 + dy;
+        } else {
+          door.x1 = doorDrag.orig.x1 + dx;
+          door.y1 = doorDrag.orig.y1 + dy;
+          door.x2 = doorDrag.orig.x2 + dx;
+          door.y2 = doorDrag.orig.y2 + dy;
+        }
+        scheduleRedraw();
+      }
+      return;
+    }
+    if (doorPlacement) {
+      scheduleRedraw(); // refresh placement-preview dashed line
+    }
+  }
+
   if (panning) {
     view.panX = panStart.panX + (sx - panStart.sx);
     view.panY = panStart.panY + (sy - panStart.sy);
@@ -1098,6 +1640,14 @@ canvas.addEventListener("pointerup", (e) => {
   if (panning) {
     panning = false;
     canvas.classList.remove("pan-active");
+    return;
+  }
+  // 2026-05-26 (Phase D) — finalize a door drag. The actual position
+  // mutation already happened in pointermove; here we just clear the
+  // drag state and release pointer capture.
+  if (doorDrag) {
+    doorDrag = null;
+    try { canvas.releasePointerCapture(e.pointerId); } catch {}
     return;
   }
   if (!drawing) return;
@@ -1213,7 +1763,65 @@ function pickColorAt(ix: number, iy: number): void {
 
 // --- Save ------------------------------------------------------------------
 
-async function save(): Promise<void> {
+// 2026-05-26 — Save now goes through a small in-editor modal that
+// asks the user whether the resulting Path + Wall items should be
+// BOUND to this map (current behaviour: locked, attached, cleared
+// and rewritten on each save) or INDEPENDENT (standalone scene
+// items; unlocked + hit-enabled so the GM can move / edit them;
+// re-opening the editor on this map shows a clean canvas because
+// loadExistingFog filters by `attachedTo === mapItemId`).
+function openSaveModeModal(): void {
+  if (document.getElementById("ffSaveModeOverlay")) return;
+  const overlay = document.createElement("div");
+  overlay.id = "ffSaveModeOverlay";
+  overlay.style.cssText =
+    "position:fixed;inset:0;z-index:9999;background:rgba(8,10,14,0.78);" +
+    "display:flex;align-items:center;justify-content:center;padding:20px";
+  const panel = document.createElement("div");
+  panel.style.cssText =
+    "background:#161922;border:1px solid rgba(255,255,255,0.15);border-radius:10px;" +
+    "padding:18px 20px;max-width:520px;width:100%;display:flex;flex-direction:column;" +
+    "gap:12px;color:#e6e8ee;font-family:inherit;font-size:13px";
+  const title = document.createElement("div");
+  title.style.cssText = "font-size:14.5px;font-weight:600;color:#fff";
+  title.textContent = en ? "Save fog as…" : "保存方式";
+  const hint = document.createElement("div");
+  hint.style.cssText = "font-size:12px;color:#9aa0b3;line-height:1.6";
+  hint.innerHTML = en
+    ? "<b>Bound to this map</b>: items follow the map when moved; re-opening the editor on this map preloads them.<br><br><b>Independent</b>: items stay put if the map moves; selectable / editable with OBR's native tools; re-opening the editor starts with a clean canvas (these items are left untouched)."
+    : "<b>绑定到地图</b>：迷雾跟随地图移动；再次打开编辑器时会自动加载这些迷雾。<br><br><b>独立存在</b>：地图移动后迷雾保持原位；可以用 OBR 原生工具选中 / 移动 / 编辑；再次打开编辑器是空白画布（不会动这批数据）。";
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:4px";
+  const close = () => { overlay.remove(); };
+  const btnCancel = document.createElement("button");
+  btnCancel.type = "button";
+  btnCancel.textContent = en ? "Cancel" : "取消";
+  btnCancel.style.cssText =
+    "padding:8px 16px;border-radius:6px;background:#262a38;color:#cfd3df;" +
+    "border:1px solid rgba(255,255,255,0.12);font-size:13px;cursor:pointer";
+  btnCancel.addEventListener("click", close);
+  const btnIndep = document.createElement("button");
+  btnIndep.type = "button";
+  btnIndep.textContent = en ? "Independent" : "独立存在";
+  btnIndep.style.cssText =
+    "padding:8px 16px;border-radius:6px;background:#3a3f50;color:#fff;" +
+    "border:1px solid rgba(255,255,255,0.18);font-size:13px;cursor:pointer";
+  btnIndep.addEventListener("click", () => { close(); void save(false); });
+  const btnBind = document.createElement("button");
+  btnBind.type = "button";
+  btnBind.textContent = en ? "Bind to map" : "绑定到地图";
+  btnBind.style.cssText =
+    "padding:8px 16px;border-radius:6px;background:linear-gradient(180deg,#5dade2,#3b8fc5);" +
+    "color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer";
+  btnBind.addEventListener("click", () => { close(); void save(true); });
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  btnRow.append(btnCancel, btnIndep, btnBind);
+  panel.append(title, hint, btnRow);
+  overlay.append(panel);
+  document.body.append(overlay);
+}
+
+async function save(bindToMap: boolean = true): Promise<void> {
   if (!mapItem || !mask) return;
   stInfo.textContent = en ? "Trimming edges…" : "毛边整理中…";
   const t0 = performance.now();
@@ -1291,10 +1899,13 @@ async function save(): Promise<void> {
           : `（自适应简化 tol=${tol.toFixed(1)} 切角=${iters}）`)
       : "";
 
-  if (processed.length === 0) {
+  // 2026-05-26 (Phase D) — relax the "no contours" guard when the
+  // user has placed doors. Door-only saves are valid (no walls, just
+  // door segments). If both are empty, still abort.
+  if (processed.length === 0 && doors.length === 0) {
     stInfo.textContent = en
-      ? "No contours to save — paint some walls first"
-      : "没有可保存的轮廓 — 先涂点墙再保存";
+      ? "Nothing to save — paint some walls or place a door first"
+      : "没有可保存的内容 — 先涂点墙或者放一扇门";
     return;
   }
 
@@ -1303,23 +1914,29 @@ async function save(): Promise<void> {
 
   // Clear pre-existing fullFog Path (shared) AND Wall items (local)
   // for this map. Walls live in OBR.scene.local — separate API.
-  try {
-    const existingPaths = await OBR.scene.items.getItems((it: Item) => {
-      return (it as any).attachedTo === mapItemId
-        && !!((it as any).metadata as any)?.[FOG_PATH_KEY];
-    });
-    if (existingPaths.length > 0) {
-      await OBR.scene.items.deleteItems(existingPaths.map((i) => i.id));
+  // 2026-05-26 — only clear when saving BOUND. Independent save mode
+  // leaves prior items alone (they're user-managed standalone scene
+  // items at this point — the editor shouldn't touch them on a
+  // subsequent save).
+  if (bindToMap) {
+    try {
+      const existingPaths = await OBR.scene.items.getItems((it: Item) => {
+        return (it as any).attachedTo === mapItemId
+          && !!((it as any).metadata as any)?.[FOG_PATH_KEY];
+      });
+      if (existingPaths.length > 0) {
+        await OBR.scene.items.deleteItems(existingPaths.map((i) => i.id));
+      }
+      const existingWalls = await OBR.scene.local.getItems((it: any) => {
+        return it.attachedTo === mapItemId
+          && !!(it.metadata as any)?.[FOG_PATH_KEY];
+      });
+      if (existingWalls.length > 0) {
+        await OBR.scene.local.deleteItems(existingWalls.map((i: any) => i.id));
+      }
+    } catch (e) {
+      console.warn("[fullFog] clear existing items failed", e);
     }
-    const existingWalls = await OBR.scene.local.getItems((it: any) => {
-      return it.attachedTo === mapItemId
-        && !!(it.metadata as any)?.[FOG_PATH_KEY];
-    });
-    if (existingWalls.length > 0) {
-      await OBR.scene.local.deleteItems(existingWalls.map((i: any) => i.id));
-    }
-  } catch (e) {
-    console.warn("[fullFog] clear existing items failed", e);
   }
 
   const tension = prefs.smoothingTension;
@@ -1353,6 +1970,7 @@ async function save(): Promise<void> {
       strokeWidth: visible ? Math.max(2, Math.round(sceneDpi / 30)) : 0,
       tension,
       wallExpandPx: Math.max(0, Math.round(prefs.wallExpandPx ?? 0)),
+      bindToMap,
     };
     let batch: typeof localPolysForOutput = [];
     let batchCount = 0;
@@ -1395,8 +2013,24 @@ async function save(): Promise<void> {
   );
   const localWallPolys = wallImgPolylines.map((c) => imagePxToMapLocal(c, mapItem, sceneDpi));
   const localItems: any[] = wantWall
-    ? buildFogWalls(localWallPolys, mapItem)
+    ? buildFogWalls(localWallPolys, mapItem, { bindToMap })
     : [];
+
+  // 2026-05-26 (Phase D) — append door items to sharedItems. Doors
+  // are tiny FOG-layer Paths with dynamic-fog door metadata; they
+  // travel through the same scene.items.addItems pipeline as the
+  // wall outline paths. (Old doors with the same map-binding were
+  // already cleared in the existing-items wipe above, gated on
+  // bindToMap — independent doors stay untouched on subsequent
+  // saves, matching the wall behaviour.)
+  let doorItemCount = 0;
+  for (const d of doors) {
+    const di = buildDoorItem(d, mapItem, sceneDpi, bindToMap);
+    if (di) {
+      sharedItems.push(di);
+      doorItemCount++;
+    }
+  }
 
   if (sharedItems.length === 0 && localItems.length === 0) {
     stInfo.textContent = en ? "Failed to build output" : "构建输出失败";
@@ -1411,14 +2045,29 @@ async function save(): Promise<void> {
       const chunk = sharedItems.slice(i, i + ADD_ITEMS_CHUNK);
       await OBR.scene.items.addItems(chunk);
     }
+    // 2026-05-26 — Walls always go to scene.local regardless of
+    // bind mode. The plugin SDK's scene.items.addItems rejects WALL
+    // items with "items[0] does not match any of the allowed types"
+    // (shared scene only accepts Path / Shape / Image / Curve / etc.;
+    // Walls are a per-client visibility primitive or get auto-derived
+    // by dynamic-fog from FOG-layer Drawings). The user's "selectable
+    // / editable" requirement in independent mode is satisfied by the
+    // Path items above (which DO go to shared scene.items, and are
+    // emitted unlocked + hit-enabled when bindToMap=false).
     for (let i = 0; i < localItems.length; i += ADD_ITEMS_CHUNK) {
       const chunk = localItems.slice(i, i + ADD_ITEMS_CHUNK);
       await OBR.scene.local.addItems(chunk);
     }
     const t1 = performance.now();
+    const modeTag = en
+      ? (bindToMap ? "bound" : "independent")
+      : (bindToMap ? "绑定" : "独立");
+    const doorSuffix = doorItemCount > 0
+      ? (en ? ` + ${doorItemCount} doors` : ` + ${doorItemCount} 门`)
+      : "";
     stInfo.textContent = en
-      ? `✅ Saved ${processed.length} segments, ${totalPts} points${adaptiveNote} (${sharedItems.length} shared Path + ${localItems.length} local Wall · ${(t1 - t0).toFixed(0)}ms)`
-      : `✅ 保存了 ${processed.length} 段 ${totalPts} 个点${adaptiveNote}（${sharedItems.length} 共享 Path + ${localItems.length} 本地 Wall · ${(t1 - t0).toFixed(0)}ms）`;
+      ? `✅ Saved [${modeTag}] ${processed.length} segments, ${totalPts} points${adaptiveNote} (${sharedItems.length} shared Path${doorSuffix} + ${localItems.length} local Wall · ${(t1 - t0).toFixed(0)}ms)`
+      : `✅ 保存了 [${modeTag}] ${processed.length} 段 ${totalPts} 个点${adaptiveNote}（${sharedItems.length} 共享 Path${doorSuffix} + ${localItems.length} 本地 Wall · ${(t1 - t0).toFixed(0)}ms）`;
     setTimeout(() => { void OBR.modal.close(MODAL_ID).catch(() => {}); }, 700);
   } catch (e) {
     // OBR rejects with a plain object whose `.message` is undefined.
@@ -1765,6 +2414,37 @@ function bindUI(): void {
   $("btn-preview").addEventListener("click", () => togglePreview());
 
   $("btn-apply-algo").addEventListener("click", () => applyAlgorithm());
+
+  // 2026-05-26 (Phase C) — B&W reference image wiring. The hidden
+  // <input type=file> spawned per click matches the project's
+  // existing import patterns (see panel-page's paste-JSON modal,
+  // editor's mask-import). The clear / show / opacity controls are
+  // also bound here; syncBwUi() flips their disabled state based
+  // on whether bwImage is currently loaded.
+  $("btn-bw-import").addEventListener("click", () => {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = "image/png,image/jpeg,image/webp,image/*";
+    inp.addEventListener("change", () => {
+      const f = inp.files?.[0];
+      if (f) void importBwImage(f);
+    });
+    inp.click();
+  });
+  $("btn-bw-clear").addEventListener("click", () => { clearBwImage(); });
+  const bwShowCb = document.getElementById("bw-show") as HTMLInputElement | null;
+  bwShowCb?.addEventListener("change", () => {
+    bwShow = bwShowCb.checked;
+    scheduleRedraw();
+  });
+  const bwOpSld = document.getElementById("bw-opacity") as HTMLInputElement | null;
+  bwOpSld?.addEventListener("input", () => {
+    bwOpacity = Math.max(0, Math.min(1, Number(bwOpSld.value) / 100));
+    const opVal = document.getElementById("bw-opacity-val");
+    if (opVal) opVal.textContent = `${Math.round(bwOpacity * 100)}%`;
+    scheduleRedraw();
+  });
+  syncBwUi();
   $("btn-apply-refine").addEventListener("click", () => applyRefinement());
   $("btn-undo").addEventListener("click", () => undo());
   $("btn-redo").addEventListener("click", () => redo());
@@ -1777,7 +2457,9 @@ function bindUI(): void {
   $("btn-clear").addEventListener("click", () => {
     if (confirm(en ? "Clear the current mask? This can be undone." : "确定清空当前 mask？此操作可撤销。")) clearMask();
   });
-  $("btn-save").addEventListener("click", () => { void save(); });
+  // 2026-05-26 — Save now opens a mode-picker modal first (bound vs
+  // independent). The modal callbacks call save(true|false).
+  $("btn-save").addEventListener("click", () => { openSaveModeModal(); });
   $("btn-cancel").addEventListener("click", () => { void cancel(); });
   $("btn-export").addEventListener("click", () => exportMaskJSON());
   $("btn-import").addEventListener("click", () => importMaskJSON());
@@ -1825,11 +2507,28 @@ window.addEventListener("keydown", (e) => {
   }
   if ((e.key === "s" || e.key === "S") && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
-    void save();
+    openSaveModeModal();
   }
   if (e.key === "Escape") {
-    if (polyPath.length > 0) { polyPath = []; scheduleRedraw(); }
+    // Door tool: Esc cancels in-flight placement first, then
+    // deselects the active door, before bubbling up to "close editor".
+    if (tool === "door" && doorPlacement) {
+      doorPlacement = null;
+      scheduleRedraw();
+    } else if (tool === "door" && selectedDoorId) {
+      selectedDoorId = null;
+      scheduleRedraw();
+    } else if (polyPath.length > 0) { polyPath = []; scheduleRedraw(); }
     else void cancel();
+  }
+  // 2026-05-26 (Phase D) — Delete / Backspace removes the selected
+  // door when the door tool is active. Mirrors how other editors
+  // handle a focused selection.
+  if (tool === "door" && selectedDoorId && (e.key === "Delete" || e.key === "Backspace")) {
+    e.preventDefault();
+    doors = doors.filter((d) => d.id !== selectedDoorId);
+    selectedDoorId = null;
+    scheduleRedraw();
   }
   if (e.key === "f" || e.key === "F") {
     if (!mapImage) return;

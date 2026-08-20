@@ -1,4 +1,4 @@
-import OBR, { buildImage, Item } from "@owlbear-rodeo/sdk";
+import OBR, { buildImage, buildLine, Item } from "@owlbear-rodeo/sdk";
 import {
   PANEL_IDS,
   getPanelOffset,
@@ -33,6 +33,7 @@ const _t = (k: Parameters<typeof t>[1]) => t(_lang(), k);
 
 const TOOL_ID = `${PLUGIN_ID}/tool`;
 const TOOL_MODE_ID = `${PLUGIN_ID}/mode`;
+const TOOL_PAIR_MODE_ID = `${PLUGIN_ID}/pair-mode`;
 const PREVIEW_ID = `${PLUGIN_ID}/draw-preview`;
 
 const EDIT_POPOVER_ID = `${PLUGIN_ID}/edit-popover`;
@@ -62,7 +63,11 @@ const TOOL_ICON_URL = assetUrl("portal-tool-icon.svg");
 const ICON_INTRINSIC = 64;
 // Default base size for OBR's image grid.dpi math — matches the SVG.
 const ICON_SIZE = ICON_INTRINSIC;
+const DEFAULT_RADIUS = 70;
 const MIN_RADIUS = 16; // ignore drags shorter than this (treated as click)
+const WALL_CLEARANCE_PADDING = 8;
+const WALL_SEARCH_EXTRA_RINGS = 10;
+const WALL_SEARCH_MAX_RINGS = 24;
 
 // Per-client blink-effect preference. Default ON. When OFF the
 // destination pick skips the blink modal and teleports immediately
@@ -99,6 +104,8 @@ let role: "GM" | "PLAYER" = "PLAYER";
 // and the real portal is committed to scene metadata.
 let dragStart: { x: number; y: number } | null = null;
 let previewItemId: string | null = null;
+let pairFirst: { x: number; y: number } | null = null;
+let pairLinePreviewItemId: string | null = null;
 
 // --- Drag-end portal entry detection ---
 //
@@ -187,7 +194,7 @@ function readPortalMeta(it: Item): PortalMeta | null {
   return {
     name: typeof mm.name === "string" ? mm.name : "",
     tag: mm.tag,
-    radius: typeof mm.radius === "number" && mm.radius > 0 ? mm.radius : 70,
+    radius: typeof mm.radius === "number" && mm.radius > 0 ? mm.radius : DEFAULT_RADIUS,
   };
 }
 
@@ -201,14 +208,14 @@ function portalCenter(it: Item): { x: number; y: number } {
 
 // --- Live preview (local-only, scales with the drag) ---------------------
 
-async function startPreview(center: { x: number; y: number }) {
+async function startPreview(center: { x: number; y: number }, radius: number = MIN_RADIUS) {
   try {
     let sceneDpi = 150;
     try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
     const half = ICON_SIZE / 2;
     // Start at scale = MIN_RADIUS so the preview is visible from the
     // very first move event instead of popping in at frame 2.
-    const s = (2 * MIN_RADIUS) / sceneDpi;
+    const s = (2 * Math.max(MIN_RADIUS, radius)) / sceneDpi;
     const img = buildImage(
       {
         width: ICON_SIZE,
@@ -253,6 +260,63 @@ async function clearPreview() {
   const id = previewItemId;
   previewItemId = null;
   try { await OBR.scene.local.deleteItems([id]); } catch {}
+}
+
+async function startPairLinePreview(from: { x: number; y: number }, to: { x: number; y: number }) {
+  await clearPairLinePreview();
+  try {
+    const line = buildLine()
+      .position({ x: 0, y: 0 })
+      .startPosition(from)
+      .endPosition(to)
+      .strokeColor("#58c7ff")
+      .strokeOpacity(0.9)
+      .strokeWidth(4)
+      .strokeDash([18, 12])
+      .layer("CONTROL")
+      .locked(true)
+      .disableHit(true)
+      .visible(true)
+      .metadata({ [`${PLUGIN_ID}/pair-line-preview`]: true })
+      .build();
+    await OBR.scene.local.addItems([line]);
+    pairLinePreviewItemId = line.id;
+  } catch (e) {
+    console.warn("[obr-suite/portals] startPairLinePreview failed", e);
+  }
+}
+
+async function updatePairLinePreview(to: { x: number; y: number }) {
+  const first = pairFirst;
+  if (!first) return;
+  if (!pairLinePreviewItemId) {
+    await startPairLinePreview(first, to);
+    return;
+  }
+  try {
+    await OBR.scene.local.updateItems([pairLinePreviewItemId], (drafts) => {
+      for (const d of drafts) {
+        const line = d as any;
+        line.position = { x: 0, y: 0 };
+        line.startPosition = { x: first.x, y: first.y };
+        line.endPosition = { x: to.x, y: to.y };
+        line.disableHit = true;
+        line.locked = true;
+      }
+    }, true);
+  } catch {}
+}
+
+async function clearPairLinePreview() {
+  if (!pairLinePreviewItemId) return;
+  const id = pairLinePreviewItemId;
+  pairLinePreviewItemId = null;
+  try { await OBR.scene.local.deleteItems([id]); } catch {}
+}
+
+async function clearPairPreview() {
+  await clearPreview();
+  await clearPairLinePreview();
 }
 
 // --- Create portal --------------------------------------------------------
@@ -302,6 +366,95 @@ async function createPortal(center: { x: number; y: number }, radius: number) {
   await OBR.scene.items.addItems([img]);
   suppressAutoEditOnce = img.id;
   await openEditPopover(img.id, true);
+}
+
+function readCreatePrefs(): Required<Pick<CreatePrefs, "showName" | "visible" | "locked">> {
+  let prefs: CreatePrefs = {};
+  try {
+    const raw = localStorage.getItem(CREATE_PREFS_KEY);
+    if (raw) prefs = JSON.parse(raw) as CreatePrefs;
+  } catch {}
+  return {
+    showName: prefs.showName === true,
+    visible: prefs.visible !== false,
+    locked: prefs.locked === true,
+  };
+}
+
+async function buildStandardPortalItem(
+  center: { x: number; y: number },
+  tag: string,
+): Promise<Item> {
+  const prefs = readCreatePrefs();
+  const radius = DEFAULT_RADIUS;
+  const meta: PortalMeta = {
+    name: "",
+    tag,
+    radius,
+    showName: prefs.showName,
+    visible: prefs.visible,
+    locked: prefs.locked,
+  };
+  let sceneDpi = 150;
+  try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
+  const half = ICON_SIZE / 2;
+  const s = (2 * radius) / sceneDpi;
+  return buildImage(
+    {
+      width: ICON_SIZE,
+      height: ICON_SIZE,
+      url: ICON_URL,
+      mime: "image/svg+xml",
+    },
+    { dpi: ICON_SIZE, offset: { x: half, y: half } }
+  )
+    .position(center)
+    .scale({ x: s, y: s })
+    .name(_t("portalToolName"))
+    .layer("PROP")
+    .visible(prefs.visible)
+    .locked(prefs.locked)
+    .metadata({ [PORTAL_KEY]: meta })
+    .build();
+}
+
+function randomPortalCode(): string {
+  try {
+    const bytes = new Uint8Array(4);
+    globalThis.crypto?.getRandomValues(bytes);
+    if (bytes.some((b) => b !== 0)) {
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    }
+  } catch {}
+  return Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0").toUpperCase();
+}
+
+async function createUniquePairTag(): Promise<string> {
+  const used = new Set<string>();
+  try {
+    const portals = await OBR.scene.items.getItems(isPortal);
+    for (const p of portals) {
+      const meta = readPortalMeta(p);
+      if (meta?.tag) used.add(meta.tag);
+    }
+  } catch {}
+  for (let i = 0; i < 12; i++) {
+    const tag = `P-${randomPortalCode()}`;
+    if (!used.has(tag)) return tag;
+  }
+  return `P-${Date.now().toString(36).toUpperCase()}`;
+}
+
+async function createLinkedPortalPair(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): Promise<void> {
+  const tag = await createUniquePairTag();
+  const portals = await Promise.all([
+    buildStandardPortalItem(a, tag),
+    buildStandardPortalItem(b, tag),
+  ]);
+  await OBR.scene.items.addItems(portals);
 }
 
 // --- Edit popover ---------------------------------------------------------
@@ -1115,6 +1268,171 @@ async function moveTokensWithFogBypass(
   }
 }
 
+type Point = { x: number; y: number };
+type WallSegment = { a: Point; b: Point };
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function transformWallPoint(wall: Item, point: Point): Point {
+  const sx = finiteNumber((wall as any).scale?.x, 1);
+  const sy = finiteNumber((wall as any).scale?.y, 1);
+  const rotation = (finiteNumber((wall as any).rotation, 0) * Math.PI) / 180;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const x = point.x * sx;
+  const y = point.y * sy;
+  return {
+    x: finiteNumber((wall as any).position?.x, 0) + x * cos - y * sin,
+    y: finiteNumber((wall as any).position?.y, 0) + x * sin + y * cos,
+  };
+}
+
+function isBlockingWallItem(item: Item): boolean {
+  const wall = item as any;
+  return (
+    wall?.type === "WALL" &&
+    wall.blocking !== false &&
+    Array.isArray(wall.points) &&
+    wall.points.length >= 2
+  );
+}
+
+function collectWallSegments(items: Item[]): WallSegment[] {
+  const segments: WallSegment[] = [];
+  for (const item of items) {
+    if (!isBlockingWallItem(item)) continue;
+    const points = ((item as any).points as Point[])
+      .filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y))
+      .map((p) => transformWallPoint(item, p));
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      if (dist(a, b) < 0.001) continue;
+      segments.push({ a, b });
+    }
+  }
+  return segments;
+}
+
+async function getBlockingWallSegments(sharedItems: Item[]): Promise<WallSegment[]> {
+  let localItems: Item[] = [];
+  try { localItems = await OBR.scene.local.getItems(); } catch {}
+  return collectWallSegments([...sharedItems, ...localItems]);
+}
+
+function readSourceRadius(value: unknown): number {
+  if (!value || typeof value !== "object") return 0;
+  const raw = (value as Record<string, unknown>).sourceRadius;
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+function tokenWallClearance(token: Item | undefined, dpi: number): number {
+  let sourceRadius = 0;
+  const metadata = (token?.metadata ?? {}) as Record<string, unknown>;
+  for (const value of Object.values(metadata)) {
+    sourceRadius = Math.max(sourceRadius, readSourceRadius(value));
+  }
+  return sourceRadius + Math.max(WALL_CLEARANCE_PADDING, dpi * 0.04);
+}
+
+function distancePointToSegment(p: Point, a: Point, b: Point): number {
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const len2 = vx * vx + vy * vy;
+  if (len2 <= 0.000001) return dist(p, a);
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2));
+  return dist(p, { x: a.x + vx * t, y: a.y + vy * t });
+}
+
+function cross(a: Point, b: Point): number {
+  return a.x * b.y - a.y * b.x;
+}
+
+function subtract(a: Point, b: Point): Point {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+
+function segmentCrossesWall(from: Point, to: Point, wall: WallSegment): boolean {
+  if (dist(from, to) < 1) return false;
+  const r = subtract(to, from);
+  const s = subtract(wall.b, wall.a);
+  const denom = cross(r, s);
+  if (Math.abs(denom) < 0.000001) return false;
+  const qp = subtract(wall.a, from);
+  const t = cross(qp, s) / denom;
+  const u = cross(qp, r) / denom;
+  return t > 0.02 && t < 0.98 && u >= -0.001 && u <= 1.001;
+}
+
+function isSafeLandingPoint(
+  point: Point,
+  origin: Point,
+  clearance: number,
+  walls: WallSegment[],
+): boolean {
+  for (const wall of walls) {
+    if (distancePointToSegment(point, wall.a, wall.b) < clearance) return false;
+    if (segmentCrossesWall(origin, point, wall)) return false;
+  }
+  return true;
+}
+
+function buildTeleportCandidates(center: Point, spacing: number, maxRing: number): Point[] {
+  const candidates: Point[] = [{ x: center.x, y: center.y }];
+  for (let ring = 1; ring <= maxRing; ring++) {
+    const count = ring * 6;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
+      candidates.push({
+        x: center.x + Math.cos(angle) * spacing * ring,
+        y: center.y + Math.sin(angle) * spacing * ring,
+      });
+    }
+  }
+  return candidates;
+}
+
+function conflictsWithReserved(point: Point, reserved: Point[], spacing: number): boolean {
+  return reserved.some((other) => dist(other, point) < spacing * 0.5);
+}
+
+function findSafeTeleportPositions(
+  tokenIds: string[],
+  tokenById: Map<string, Item>,
+  occupants: Point[],
+  center: Point,
+  spacing: number,
+  dpi: number,
+  walls: WallSegment[],
+): Point[] | null {
+  const maxRing = Math.min(
+    WALL_SEARCH_MAX_RINGS,
+    Math.max(WALL_SEARCH_EXTRA_RINGS, Math.ceil(Math.sqrt(tokenIds.length + occupants.length + 1)) + WALL_SEARCH_EXTRA_RINGS),
+  );
+  const candidates = buildTeleportCandidates(center, spacing, maxRing);
+  const positions: Point[] = [];
+  for (const id of tokenIds) {
+    const clearance = tokenWallClearance(tokenById.get(id), dpi);
+    const reserved = [...occupants, ...positions];
+    const chosen = candidates.find((c) =>
+      !conflictsWithReserved(c, reserved, spacing) &&
+      isSafeLandingPoint(c, center, clearance, walls)
+    );
+    if (!chosen) return null;
+    positions.push({ x: chosen.x, y: chosen.y });
+  }
+  return positions;
+}
+
+async function notifyNoSafeLanding(): Promise<void> {
+  const msg = _lang() === "en"
+    ? "No safe portal landing point found near the destination."
+    : "目的地附近没有找到安全落点，已取消传送。";
+  try { await OBR.notification.show(msg, "WARNING"); } catch {}
+}
+
 async function teleport(
   destPortalId: string,
   tokenIds: string[],
@@ -1138,11 +1456,12 @@ async function teleport(
   // radius + 1 grid cell is "already there" and skipped during placement.
   const destMeta = readPortalMeta(dest);
   const destRadius = destMeta?.radius ?? spacing;
-  let occupants: { x: number; y: number }[] = [];
+  let occupants: Point[] = [];
+  let allItems: Item[] = [];
   try {
-    const all = await OBR.scene.items.getItems();
+    allItems = await OBR.scene.items.getItems();
     const teleSet = new Set(tokenIds);
-    occupants = all
+    occupants = allItems
       .filter((it) =>
         !teleSet.has(it.id) &&
         (it.layer === "CHARACTER" || it.layer === "MOUNT") &&
@@ -1152,38 +1471,27 @@ async function teleport(
       .map((it) => ({ x: it.position.x, y: it.position.y }));
   } catch {}
 
-  // Hex-ring spiral. Generate enough candidate slots to cover both
-  // the teleporting tokens AND any existing occupants we'll need to
-  // skip past, then pick the first N that don't conflict.
-  const needed = tokenIds.length;
-  const target = needed + occupants.length;
-  const candidates: { x: number; y: number }[] = [
-    { x: center.x, y: center.y },
-  ];
-  let ring = 1;
-  while (candidates.length < target + 1) {
-    const count = ring * 6;
-    for (let i = 0; i < count && candidates.length < target + 1; i++) {
-      const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
-      candidates.push({
-        x: center.x + Math.cos(angle) * spacing * ring,
-        y: center.y + Math.sin(angle) * spacing * ring,
-      });
-    }
-    ring++;
+  // Hex-ring spiral, filtered by existing occupants and Dynamic Fog
+  // walls. A candidate must be far enough from every blocking wall
+  // for the token's sourceRadius + padding, and must not sit across a
+  // wall from the destination portal center.
+  const tokenById = new Map<string, Item>();
+  for (const item of allItems) {
+    if (tokenIds.includes(item.id)) tokenById.set(item.id, item);
   }
-  const conflict = (p: { x: number; y: number }) =>
-    occupants.some((o) => dist(o, p) < spacing * 0.5);
-  const positions: { x: number; y: number }[] = [];
-  for (const c of candidates) {
-    if (conflict(c)) continue;
-    positions.push(c);
-    if (positions.length >= needed) break;
-  }
-  // Fallback — every candidate conflicted (small portal stuffed full
-  // of tokens). Stack on the center rather than refusing the teleport.
-  while (positions.length < needed) {
-    positions.push({ x: center.x, y: center.y });
+  const wallSegments = await getBlockingWallSegments(allItems);
+  const positions = findSafeTeleportPositions(
+    tokenIds,
+    tokenById,
+    occupants,
+    center,
+    spacing,
+    dpi,
+    wallSegments,
+  );
+  if (!positions) {
+    await notifyNoSafeLanding();
+    return;
   }
 
   // The move (all phases 1-3 with fog/wall plugin bypass).
@@ -1315,6 +1623,7 @@ export async function setupPortals(): Promise<void> {
           filter: { roles: ["GM"] },
         },
       ],
+      defaultMode: TOOL_MODE_ID,
       onClick: async () => {
         await OBR.tool.activateTool(TOOL_ID);
         return false;
@@ -1365,6 +1674,58 @@ export async function setupPortals(): Promise<void> {
       onToolDragCancel: async () => {
         dragStart = null;
         await clearPreview();
+      },
+      onDeactivate: async () => {
+        dragStart = null;
+        await clearPreview();
+      },
+    });
+
+    await OBR.tool.createMode({
+      id: TOOL_PAIR_MODE_ID,
+      icons: [
+        {
+          icon: TOOL_ICON_URL,
+          label: _lang() === "en" ? "Create linked pair" : "点两处创建一对传送门",
+          filter: { activeTools: [TOOL_ID] },
+        },
+      ],
+      cursors: [{ cursor: "crosshair" }],
+      onToolMove: async (_ctx, event) => {
+        if (!pairFirst) return;
+        const p = (event as any).pointerPosition as { x: number; y: number } | undefined;
+        if (!p) return;
+        await updatePairLinePreview({ x: p.x, y: p.y });
+      },
+      onToolClick: async (_ctx, event) => {
+        const p = (event as any).pointerPosition as { x: number; y: number } | undefined;
+        if (!p) return false;
+        const target: any = (event as any).target;
+        if (!pairFirst && target && target.metadata && target.metadata[PORTAL_KEY]) {
+          return true;
+        }
+        if (!pairFirst) {
+          pairFirst = { x: p.x, y: p.y };
+          await clearPairPreview();
+          await startPreview(pairFirst, DEFAULT_RADIUS);
+          await startPairLinePreview(pairFirst, pairFirst);
+          return false;
+        }
+        const first = pairFirst;
+        pairFirst = null;
+        await clearPairPreview();
+        if (dist(first, p) < MIN_RADIUS) return false;
+        await createLinkedPortalPair(first, { x: p.x, y: p.y });
+        return false;
+      },
+      onKeyDown: async (_ctx, event) => {
+        if (event.key !== "Escape") return;
+        pairFirst = null;
+        await clearPairPreview();
+      },
+      onDeactivate: async () => {
+        pairFirst = null;
+        await clearPairPreview();
       },
     });
   }
@@ -1647,8 +2008,9 @@ export async function teardownPortals(): Promise<void> {
   await closeEditPopover();
   await closeDestinationPopover();
   await closeBlinkModal();
-  await clearPreview();
+  await clearPairPreview();
   if (role === "GM") {
+    try { await OBR.tool.removeMode(TOOL_PAIR_MODE_ID); } catch {}
     try { await OBR.tool.removeMode(TOOL_MODE_ID); } catch {}
     try { await OBR.tool.remove(TOOL_ID); } catch {}
   }
@@ -1665,6 +2027,7 @@ export async function teardownPortals(): Promise<void> {
   pendingTeleport = null;
   pendingFocus = null;
   pendingGather = null;
+  pairFirst = null;
   lastTokenPos.clear();
   recentlyTeleported.clear();
 }

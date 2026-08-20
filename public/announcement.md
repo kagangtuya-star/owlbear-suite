@@ -17,7 +17,7 @@
 > `<span style="color:#hex">文本</span>` 给一段文字上色。
 > 部署：`bash deploy-suite-dev.sh`（dev）或 `bash deploy-suite.sh`（正式版）。
 
-## Full Suite 插件项目封盘公告 [warn] [zh]
+## Full Suite 插件项目封盘公告 [notice] [zh]
 
 感谢各位 DM、玩家这一个月以来的支持...！
 
@@ -52,7 +52,7 @@
 这段路能陪你们走过来，是这个项目最大的意义。
 说不定哪天我又突然蹦出来做点什么呢，谁知道呢，总之非常感谢啊非常感谢。
 
-## Full Suite Project Closure [warn] [en]
+## Full Suite Project Closure [notice] [en]
 
 Thank you, every DM and every player, for the support over this past month...!
 

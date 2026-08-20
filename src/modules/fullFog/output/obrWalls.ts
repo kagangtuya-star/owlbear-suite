@@ -87,31 +87,37 @@ export function imagePxToWorldPts(
 export function buildFogWalls(
   localPolys: Vec2[][],
   mapItem: any,
+  options: { bindToMap?: boolean } = {},
 ): any[] {
   const out: any[] = [];
   const mapId = mapItem.id;
   const pos = mapItem.position ?? { x: 0, y: 0 };
   const rot = mapItem.rotation ?? 0;
   const scl = mapItem.scale ?? { x: 1, y: 1 };
+  // 2026-05-26 — bindToMap=false produces standalone Walls (editor's
+  // "independent" save mode): same blocking behaviour, same world
+  // location (transform mirrors the map at save time), but no
+  // `attachedTo`, so they don't follow the map if it moves later.
+  const bindToMap = options.bindToMap !== false;
   for (const poly of localPolys) {
     if (poly.length < 2) continue;
     const points: Vector2[] = poly.map((p) => ({ x: p.x, y: p.y }));
     try {
-      const w = buildWall()
+      let b = buildWall()
         .points(points)
         .doubleSided(true)
         .blocking(true)
-        .attachedTo(mapId)
         .position(pos)
         .rotation(rot)
         .scale(scl)
-        .disableAttachmentBehavior(["VISIBLE", "COPY"])
         .metadata({
           [FOG_PATH_KEY]: true,
-          [FOG_MAP_KEY]: { mapId, savedAt: Date.now(), kind: "wall" },
-        })
-        .build();
-      out.push(w);
+          [FOG_MAP_KEY]: { mapId, savedAt: Date.now(), kind: "wall", bindToMap },
+        });
+      if (bindToMap) {
+        b = b.attachedTo(mapId).disableAttachmentBehavior(["VISIBLE", "COPY"]);
+      }
+      out.push(b.build());
     } catch (e) {
       console.error("[fullFog] buildWall failed for polyline of", points.length, "pts:", e);
     }

@@ -260,15 +260,15 @@ async function handleSelection(selection: string[] | undefined): Promise<void> {
 }
 
 // Auto-popup flags from the bestiary / character-cards modules.
-// Both default to ON when the localStorage key is absent. Users
+// Both default to OFF when the localStorage key is absent. Users
 // flip these via Settings → 怪物图鉴 / 角色卡.
 function isBestiaryAutoPopupOn(): boolean {
-  try { return localStorage.getItem("com.bestiary/auto-popup") !== "0"; }
-  catch { return true; }
+  try { return localStorage.getItem("com.bestiary/auto-popup") === "1"; }
+  catch { return false; }
 }
 function isCcAutoPopupOn(): boolean {
-  try { return localStorage.getItem("character-cards/auto-info") !== "0"; }
-  catch { return true; }
+  try { return localStorage.getItem("character-cards/auto-info") === "1"; }
+  catch { return false; }
 }
 
 export async function setupHpBar(): Promise<void> {

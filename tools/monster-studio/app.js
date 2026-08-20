@@ -457,10 +457,10 @@ function sampleDoc() {
         ],
         legendary: [],
       },
-      // Full-featured example: every section type populated (trait
-      // with spellcasting block, action multiattack, bonus action,
-      // reaction, legendary actions). Pick the Lich because it's the
-      // canonical "has-it-all" stat block.
+      // Full-featured example: every section type populated (trait,
+      // spellcasting block, action multiattack, bonus action, reaction,
+      // legendary actions). Pick the Lich because it's the canonical
+      // "has-it-all" stat block.
       {
         name: zh ? "巫妖" : "Lich",
         ENG_name: "Lich",
@@ -486,12 +486,90 @@ function sampleDoc() {
             ? { name: "传奇反抗（每日3次）", entries: ["若巫妖一次豁免检定失败，可改判其成功。"] }
             : { name: "Legendary Resistance (3/Day)", entries: ["If the lich fails a saving throw, it can choose to succeed instead."] },
           zh
-            ? { name: "法术施放", entries: ["巫妖是 18 级法师。其法术施放属性为智力（豁免 DC 20，法术攻击 {@hit 12} 命中）。它已准备以下法师法术：", "戏法（随意）：{@spell 法师之手}, {@spell 摩苓加之手}, {@spell 法术防护}, {@spell 心灵震击}", "1环（每日4次）：{@spell 法师护甲}, {@spell 侦测魔法}, {@spell 魔法飞弹}, {@spell 护盾}", "2环（每日3次）：{@spell 黑暗术}, {@spell 模糊术}, {@spell 失能术}, {@spell 镜影术}", "3环（每日3次）：{@spell 反制法术}, {@spell 闪电术}, {@spell 加速术}", "4环（每日3次）：{@spell 喷涌冰雹}, {@spell 次元门}", "5环（每日3次）：{@spell 操控气候}, {@spell 凡人圈套}", "6环（每日1次）：{@spell 全域防护}, {@spell 解离射线}", "7环（每日1次）：{@spell 手指死亡}, {@spell 传送术}", "8环（每日1次）：{@spell 心智控制}, {@spell 力场领域}", "9环（每日1次）：{@spell 灵魂禁锢}"] }
-            : { name: "Spellcasting", entries: ["The lich is an 18th-level spellcaster. Its spellcasting ability is Intelligence (spell save DC 20, {@hit 12} to hit with spell attacks). It has the following wizard spells prepared:", "Cantrips (at will): {@spell mage hand}, {@spell prestidigitation}, {@spell ray of frost}", "1st level (4 slots): {@spell detect magic}, {@spell magic missile}, {@spell shield}, {@spell thunderwave}", "2nd level (3 slots): {@spell detect thoughts}, {@spell invisibility}, {@spell acid arrow}, {@spell mirror image}", "3rd level (3 slots): {@spell animate dead}, {@spell counterspell}, {@spell dispel magic}, {@spell fireball}", "4th level (3 slots): {@spell blight}, {@spell dimension door}", "5th level (3 slots): {@spell cloudkill}, {@spell scrying}", "6th level (1 slot): {@spell disintegrate}, {@spell globe of invulnerability}", "7th level (1 slot): {@spell finger of death}, {@spell plane shift}", "8th level (1 slot): {@spell dominate monster}, {@spell power word stun}", "9th level (1 slot): {@spell power word kill}"] }
-,
-          zh
             ? { name: "回光返照", entries: ["持有它命匣的巫妖在身死后 1d10 天内于命匣 5 尺内重新成形，获得满血。"] }
             : { name: "Rejuvenation", entries: ["If it has a phylactery, a destroyed lich gains a new body in 1d10 days, regaining all its hit points within 5 ft. of the phylactery."] },
+        ],
+        spellcasting: zh ? [
+          {
+            ENG_name: "Spellcasting",
+            name: "施法",
+            type: "spellcasting",
+            headerEntries: [
+              "银辉法师作为6级施法者，其施法属性为智力（法术豁免{@dc 13}，法术攻击加值{@hit 5}）。银辉法师准备了以下法师法术：",
+            ],
+            spells: {
+              "0": {
+                spells: [
+                  "{@spell 火焰箭}",
+                  "{@spell 法师之手}",
+                  "{@spell 光亮术}",
+                  "{@spell 冷冻射线}",
+                ],
+              },
+              "1": {
+                slots: 4,
+                spells: [
+                  "{@spell 魔法飞弹}",
+                  "{@spell 法术护甲}",
+                  "{@spell 护盾术}",
+                  "{@spell 燃烧之手}",
+                  "{@spell 塔莎狂笑术}",
+                  "{@spell 雷鸣波}",
+                  "{@spell 云雾术}",
+                ],
+              },
+              "2": {
+                slots: 3,
+                spells: [
+                  "{@spell 迷踪步}",
+                  "{@spell 匕首之云}",
+                  "{@spell 定身类人}",
+                  "{@spell 心灵尖刺}",
+                  "{@spell 龙息术}",
+                  "{@spell 地缚}",
+                  "{@spell 造风术}",
+                  "{@spell 灼热金属}",
+                  "{@spell 强化属性}",
+                  "{@spell 史尼洛雪球群}",
+                  "{@spell 麦克斯米利安的地之攫}",
+                  "{@spell 次等复原术}",
+                ],
+              },
+              "3": {
+                slots: 3,
+                spells: [
+                  "{@spell 缓慢术}",
+                  "{@spell 火球术}",
+                  "{@spell 解除魔法}",
+                  "{@spell 银墙术}",
+                  "{@spell 雪雨暴}",
+                ],
+              },
+            },
+            ability: "int",
+          },
+        ] : [
+          {
+            ENG_name: "Spellcasting",
+            name: "Spellcasting",
+            type: "spellcasting",
+            headerEntries: [
+              "The lich is an 18th-level spellcaster. Its spellcasting ability is Intelligence (spell save {@dc 20}, {@hit 12} to hit with spell attacks). It has the following wizard spells prepared:",
+            ],
+            spells: {
+              "0": { spells: ["{@spell mage hand}", "{@spell prestidigitation}", "{@spell ray of frost}"] },
+              "1": { slots: 4, spells: ["{@spell detect magic}", "{@spell magic missile}", "{@spell shield}", "{@spell thunderwave}"] },
+              "2": { slots: 3, spells: ["{@spell detect thoughts}", "{@spell invisibility}", "{@spell acid arrow}", "{@spell mirror image}"] },
+              "3": { slots: 3, spells: ["{@spell animate dead}", "{@spell counterspell}", "{@spell dispel magic}", "{@spell fireball}"] },
+              "4": { slots: 3, spells: ["{@spell blight}", "{@spell dimension door}"] },
+              "5": { slots: 3, spells: ["{@spell cloudkill}", "{@spell scrying}"] },
+              "6": { slots: 1, spells: ["{@spell disintegrate}", "{@spell globe of invulnerability}"] },
+              "7": { slots: 1, spells: ["{@spell finger of death}", "{@spell plane shift}"] },
+              "8": { slots: 1, spells: ["{@spell dominate monster}", "{@spell power word stun}"] },
+              "9": { slots: 1, spells: ["{@spell power word kill}"] },
+            },
+            ability: "int",
+          },
         ],
         action: [
           zh

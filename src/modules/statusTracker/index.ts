@@ -9,9 +9,9 @@
 //      via OBR.scene.local.addItems on layer POST_PROCESS, attached
 //      to its token. These follow tokens automatically; the user
 //      can pan / zoom freely while the rings stay locked on.
-//   3. Capture overlay modal (transient, opens on drag-start, closes
-//      on drag-end). Fullscreen, captures pointer events, paints
-//      buffs onto tokens as the cursor crosses each ring.
+//   3. Capture overlay modal (transient, still used by the manage
+//      popover transfer path). Palette application itself is now a
+//      click-select → canvas-click flow handled by this tool mode.
 //
 // Tool action (`]` shortcut on the Select tool) toggles the whole
 // thing on / off. Modal lifecycle is driven by broadcasts the
@@ -34,11 +34,10 @@ import {
   readTokenBuffRounds,
   sweepAllOurItems,
 } from "./bubbles";
-// circles.ts is still imported by capture-page for getTokenCircleSpec
-// (hit-testing radius). The persistent local-Shape rings are no longer
-// rendered from the background — the helpers stay around so the
-// capture overlay's hit-test math reuses the exact same radius
-// formula.
+// getTokenCircleSpec is reused for invisible click hit-testing when a
+// palette status has been selected. The persistent local-Shape rings
+// are no longer rendered from the background.
+import { getTokenCircleSpec } from "./circles";
 import {
   PANEL_IDS,
   getPanelOffset,
@@ -68,6 +67,9 @@ const BC_DRAG_START = `${PLUGIN_ID}/drag-start`;
 const BC_DRAG_END = `${PLUGIN_ID}/drag-end`;
 const BC_TOGGLE = `${PLUGIN_ID}/toggle`;
 const BC_REFRESH_TOKEN = `${PLUGIN_ID}/refresh-token`;
+const BC_SELECT_APPLY = `${PLUGIN_ID}/select-apply`;
+const BC_SELECT_CANCEL = `${PLUGIN_ID}/select-cancel`;
+const BC_SELECT_STATE = `${PLUGIN_ID}/select-state`;
 // Sent by the capture overlay when the user drops the 🛠 manage
 // pill onto a token. Background opens a popover anchored to that
 // token listing the token's current buffs for direct manipulation.
@@ -90,6 +92,11 @@ const PALETTE_INSET_BOTTOM = 16;
 
 let active = false;
 let captureOpen = false;
+type SelectedPaletteApply =
+  | { kind: "buff"; key: string; buff: BuffDef }
+  | { kind: "clear"; key: "__clear__" }
+  | { kind: "manage"; key: "__manage__" };
+let selectedApply: SelectedPaletteApply | null = null;
 // Tool the user was on when they activated status tracker. Used so
 // the `]` shortcut can switch BACK to whatever they had selected
 // previously instead of always returning to the move tool.
@@ -148,8 +155,9 @@ async function openCapture(payload: {
   kind: "buff" | "clear" | "manage" | "manage-transfer" | "preset";
   buff?: BuffDef;
   /** "drop" = apply to single token on pointerup (left click).
-   *  "paint-toggle" = drag-paint, toggling per-token (right click). */
-  mode: "drop" | "paint-toggle";
+   *  "paint-toggle" = drag-paint, toggling per-token (right click).
+   *  "click-place" = selected palette bubble carried by the cursor. */
+  mode: "drop" | "paint-toggle" | "click-place";
   /** Only set for kind="manage-transfer". The token the user dragged
    *  the buff FROM (= source). On drop on a target token we remove
    *  the buff from this source and add it to the target; on drop on
@@ -254,6 +262,127 @@ async function closeManagePopover(): Promise<void> {
   if (!managePopoverOpen) return;
   try { await OBR.popover.close(POPOVER_MANAGE); } catch {}
   managePopoverOpen = false;
+}
+
+function isStatusTargetItem(item: any): boolean {
+  return item?.type === "IMAGE"
+    && (item.layer === "CHARACTER" || item.layer === "MOUNT" || item.layer === "PROP");
+}
+
+async function publishSelectedApplyState(): Promise<void> {
+  try {
+    await OBR.broadcast.sendMessage(
+      BC_SELECT_STATE,
+      { key: selectedApply?.key ?? null },
+      { destination: "LOCAL" },
+    );
+  } catch {}
+}
+
+async function cancelSelectedApply(): Promise<void> {
+  if (!selectedApply) return;
+  selectedApply = null;
+  await closeCapture();
+  await publishSelectedApplyState();
+}
+
+async function findClickedStatusTarget(event: any): Promise<string | null> {
+  const direct = event?.target;
+  if (isStatusTargetItem(direct)) return direct.id as string;
+
+  const p = event?.pointerPosition as { x?: number; y?: number } | undefined;
+  if (!p || typeof p.x !== "number" || typeof p.y !== "number") return null;
+
+  let items: any[] = [];
+  try { items = await OBR.scene.items.getItems(); } catch { return null; }
+  let sceneDpi = 150;
+  try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
+
+  const candidates = items
+    .filter(isStatusTargetItem)
+    .map((item) => {
+      const spec = getTokenCircleSpec(item, sceneDpi);
+      const dx = p.x! - spec.cx;
+      const dy = p.y! - spec.cy;
+      return {
+        id: item.id as string,
+        zIndex: typeof item.zIndex === "number" ? item.zIndex : 0,
+        inside: dx * dx + dy * dy <= spec.radius * spec.radius,
+      };
+    })
+    .filter((x) => x.inside)
+    .sort((a, b) => b.zIndex - a.zIndex);
+  return candidates[0]?.id ?? null;
+}
+
+async function toggleBuffOnToken(tokenId: string, buff: BuffDef): Promise<void> {
+  try {
+    await OBR.scene.items.updateItems([tokenId], (drafts) => {
+      for (const d of drafts) {
+        const cur = (d.metadata as any)[STATUS_BUFFS_KEY];
+        const list: string[] = Array.isArray(cur)
+          ? cur.filter((x: any) => typeof x === "string")
+          : [];
+        const idx = list.indexOf(buff.id);
+        const curRounds = (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY];
+        const roundsMap = curRounds && typeof curRounds === "object" && !Array.isArray(curRounds)
+          ? { ...(curRounds as Record<string, number>) }
+          : {};
+        if (idx >= 0) {
+          list.splice(idx, 1);
+          delete roundsMap[buff.id];
+        } else {
+          list.push(buff.id);
+          const rounds = Math.floor(Number(buff.rounds ?? 0));
+          if (Number.isFinite(rounds) && rounds > 0) roundsMap[buff.id] = rounds;
+        }
+        (d.metadata as any)[STATUS_BUFFS_KEY] = list;
+        (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY] = roundsMap;
+      }
+    });
+    await refreshTokenBuffs(tokenId);
+  } catch (e) {
+    console.warn("[status] toggleBuffOnToken failed", tokenId, e);
+  }
+}
+
+async function clearAllBuffsOnToken(tokenId: string): Promise<void> {
+  try {
+    await OBR.scene.items.updateItems([tokenId], (drafts) => {
+      for (const d of drafts) {
+        (d.metadata as any)[STATUS_BUFFS_KEY] = [];
+        (d.metadata as any)[STATUS_BUFF_ROUNDS_KEY] = {};
+      }
+    });
+    await refreshTokenBuffs(tokenId);
+  } catch (e) {
+    console.warn("[status] clearAllBuffsOnToken failed", tokenId, e);
+  }
+}
+
+async function applySelectedToToken(tokenId: string): Promise<void> {
+  if (!selectedApply) return;
+  if (selectedApply.kind === "buff") {
+    await toggleBuffOnToken(tokenId, selectedApply.buff);
+  } else if (selectedApply.kind === "clear") {
+    await clearAllBuffsOnToken(tokenId);
+  } else if (selectedApply.kind === "manage") {
+    await openManagePopover(tokenId);
+    await cancelSelectedApply();
+  }
+}
+
+async function handleSelectedCanvasClick(event: any): Promise<boolean> {
+  const button = typeof event?.button === "number" ? event.button : 0;
+  if (button === 2) {
+    await cancelSelectedApply();
+    return false;
+  }
+  if (!selectedApply) return true;
+  const tokenId = await findClickedStatusTarget(event);
+  if (!tokenId) return false;
+  await applySelectedToToken(tokenId);
+  return false;
 }
 
 // 2026-05-14 (#2) — append a buff built from a canvas item into the
@@ -381,6 +510,7 @@ async function activate(): Promise<void> {
 async function deactivate(): Promise<void> {
   if (!active) return;
   active = false;
+  await cancelSelectedApply();
   await closeCapture();
   await closeManagePopover();
   await closePalette();
@@ -763,6 +893,19 @@ export async function setupStatusTracker(): Promise<void> {
         },
       ],
       cursors: [{ cursor: "default" }],
+      onToolDown: async (_ctx, event) => {
+        if ((event as any).button === 2) await cancelSelectedApply();
+      },
+      onToolClick: async (_ctx, event) => {
+        return handleSelectedCanvasClick(event as any);
+      },
+      onKeyDown: async (_ctx, event) => {
+        if (event.key !== "Escape") return;
+        await cancelSelectedApply();
+      },
+      onDeactivate: async () => {
+        await cancelSelectedApply();
+      },
     });
   } catch (e) {
     console.warn("[status] createMode failed", e);
@@ -823,6 +966,34 @@ export async function setupStatusTracker(): Promise<void> {
   } catch (e) {
     console.warn("[status] createAction failed", e);
   }
+
+  unsubs.push(
+    OBR.broadcast.onMessage(BC_SELECT_APPLY, (event) => {
+      const data = event.data as
+        | { kind?: "buff"; buff?: BuffDef; key?: string }
+        | { kind?: "clear"; key?: "__clear__" }
+        | { kind?: "manage"; key?: "__manage__" }
+        | undefined;
+      if (!data?.kind) return;
+      let capturePayload: Parameters<typeof openCapture>[0] | null = null;
+      if (data.kind === "buff") {
+        if (!data.buff?.id) return;
+        selectedApply = { kind: "buff", key: data.key || data.buff.id, buff: data.buff };
+        capturePayload = { kind: "buff", buff: data.buff, mode: "click-place" };
+      } else if (data.kind === "clear") {
+        selectedApply = { kind: "clear", key: "__clear__" };
+        capturePayload = { kind: "clear", mode: "click-place" };
+      } else if (data.kind === "manage") {
+        selectedApply = { kind: "manage", key: "__manage__" };
+        capturePayload = { kind: "manage", mode: "click-place" };
+      }
+      void publishSelectedApplyState();
+      if (capturePayload) void openCapture(capturePayload);
+    }),
+  );
+  unsubs.push(
+    OBR.broadcast.onMessage(BC_SELECT_CANCEL, () => { void cancelSelectedApply(); }),
+  );
 
   // Palette → background broadcasts. The drag-start payload now
   // includes `mode` (drop / paint-toggle) so the capture overlay

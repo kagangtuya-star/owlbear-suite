@@ -61,7 +61,7 @@ let musicBoardOpen = false;
 let isGM = false;
 
 function isAutoPopupOn(key: string): boolean {
-  return readLS(key, "1") !== "0";
+  return readLS(key, "0") === "1";
 }
 function setAutoPopupOn(key: string, on: boolean, msg: string) {
   writeLS(key, on ? "1" : "0");
@@ -145,7 +145,12 @@ function renderRow() {
       })
     );
   }
-  if (isGM && s.enabled.musicBoard) {
+  // 2026-05-23 — music board RETIRED with project closure. The button
+  // is hard-pinned off regardless of any stored `state.enabled.musicBoard`
+  // flag from older rooms (matches background.ts removing musicBoard from
+  // the modules registry). Click handler / state listeners below are left
+  // wired but become no-ops since #btnMusic never enters the DOM.
+  if (false) {
     parts.push(
       btnHTML({
         id: "btnMusic",

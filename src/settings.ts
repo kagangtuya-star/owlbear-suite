@@ -35,6 +35,15 @@ import {
   getLocalFiles,
   BC_LOCAL_CONTENT_CHANGED,
   type LocalFileMeta,
+  // 2026-05-27 — URL subscription feature for homebrew packs.
+  // Lets the user paste a public JSON URL and have the suite re-fetch
+  // it on each session boot so author-side updates auto-propagate.
+  getRemoteSubscriptions,
+  addRemoteSubscription,
+  refreshRemoteSubscription,
+  removeRemoteSubscription,
+  refreshStaleSubscriptions,
+  type RemoteSubscription,
 } from "./utils/localContent";
 import { repairLegacyHiddenBubbles } from "./modules/bubbles";
 
@@ -138,6 +147,7 @@ const SUPPORTER_AVATARS: Record<string, string> = {
   "跑冰风谷水群被抓的某位":      "supporter-avatars/跑冰风谷水群被抓的某位.png",
   "鱼喵":                        "supporter-avatars/鱼喵.png",
   "克雷锰特":                    "supporter-avatars/克雷锰特.png",
+  "xhchi_小火车":                "supporter-avatars/xhchi_小火车.png",
 };
 
 function findSupporterAvatar(name: string): string | null {
@@ -702,6 +712,26 @@ const FOLLOW_DESC: BilingualHtml = {
   <li><b>Multi-client</b>: all clients see the follow movement, but only the GM can create / delete bindings</li>
 </ul>`,
 };
+const TRANSFORM_DESC: BilingualHtml = {
+  zh: `<p><b>变身</b>为 CHARACTER 图层 token 增加右键菜单：选择怪物图鉴里的生物后，token 图片、尺寸、名称、怪物图鉴绑定、HP / AC 数据会一起切换；右键 <b>解除变身</b> 会回到上一个状态。</p>
+<ul>
+  <li><b>DM 使用</b>：DM 右键任何角色 token → <b>变身</b>，弹出怪物图鉴选择形态。</li>
+  <li><b>玩家授权</b>：DM 在变身图鉴顶部开启「授权玩家」，并填写类型和 CR 范围。例如类型填「野兽」、最高 CR 填 6，则该 token 的 Owner 玩家只能选择 CR 6 及以下的野兽。</li>
+  <li><b>默认关闭玩家入口</b>：未对 token 保存授权时，玩家端右键菜单不会显示「变身」。</li>
+  <li><b>血量模式</b>：弹窗顶部可选「独立计算」或「角色卡为准」。独立计算会在变身期间使用怪物 HP，并在解除时恢复原角色卡 HP；角色卡为准会在绑定角色卡时保留角色卡 HP、忽略怪物 HP。</li>
+  <li><b>解除变身</b>：变身后的 token 右键会出现「解除变身」，DM 和该 token 的 Owner 玩家都可以使用。</li>
+  <li><b>嵌套变身</b>：连续变多次会压栈；解除一次只回退到上一个形态。</li>
+</ul>`,
+  en: `<p><b>Transform</b> adds a context-menu action to CHARACTER tokens. Pick a creature from the Bestiary and the token image, size, name, bestiary binding, and HP / AC metadata switch together. <b>Revert</b> restores the previous state.</p>
+<ul>
+  <li><b>GM use</b>: right-click any character token → <b>Transform</b>, then pick a form from the Bestiary.</li>
+  <li><b>Player permission</b>: in the transform picker header, the GM can enable owner access and set type / CR limits. For example, type <code>beast</code> and max CR <code>6</code> lets the token owner pick beasts up to CR 6.</li>
+  <li><b>Off by default</b>: until a token has permission saved, players do not see Transform in the context menu.</li>
+  <li><b>HP mode</b>: the picker header can use independent monster HP while transformed, restoring the previous character-card HP on revert, or keep bound character-card HP and ignore monster HP.</li>
+  <li><b>Revert</b>: transformed tokens get a Revert context-menu action usable by the GM and the token owner.</li>
+  <li><b>Nested forms</b>: multiple transforms stack; each revert returns to the previous form.</li>
+</ul>`,
+};
 const TRICKSTER_DESC: BilingualHtml = {
   zh: `<p>左侧 tool 栏的「<b>捣蛋鬼在哪？</b>」用于在场景里画出隐藏的触发圆——指定的 token 一旦走进圆里，就会自动开启<b>时停</b>并把镜头聚焦到它身上，做<b>伏击触发器</b> / 暗门 / 陷阱很方便。</p>
 <ul>
@@ -773,7 +803,17 @@ const SEARCH_DESC: BilingualHtml = {
 // matching keys). The tutorial below + AI prompt template walks the user
 // through writing a homebrew library and feeding it to an LLM.
 
-const AI_PROMPT_TEMPLATE = `你是一个 D&D 5E 数据格式工程师。请把我下面提供的怪物 / 法术 / 物品资料，转换为符合 5etools 数据规范的 JSON 文件，可直接通过"📁 本地内容"导入到枭熊插件（无需托管）。
+// 2026-05-26 — lang-aware. Both prompts now also include an explicit
+// compatibility section after a real-world KamiYang-Dev/5etools-
+// partnered library was reported as non-functional: it used string
+// `c: "monster"` instead of numeric `c: 1`, `collection-*.json`
+// wrapper files (with `_meta`) instead of per-source `bestiary-
+// {SOURCE}.json`, and entry-side `p:` path strings instead of the
+// numeric page-number this plugin expects. Those are the three
+// "don't do that" rules now explicitly called out below so an AI
+// won't produce data the plugin can't consume.
+const AI_PROMPT_TEMPLATE: Record<Language, string> = {
+  zh: `你是一个 D&D 5E 数据格式工程师。请把我下面提供的怪物 / 法术 / 物品资料，转换为符合 5etools 数据规范的 JSON 文件，可直接通过"📁 本地内容"导入到枭熊插件（无需托管）。
 
 输出要求：
 1. 按以下顶层结构产出 JSON 文件（整个文件就是一个 JSON 对象，顶层只有一个键）：
@@ -791,11 +831,44 @@ const AI_PROMPT_TEMPLATE = `你是一个 D&D 5E 数据格式工程师。请把�
 6. **不要**追加 search/index.json 那种 entry index 项 —— 本地导入会从顶层数组自动生成索引。
 7. **不要**输出说明文字、Markdown 围栏或任何解释 —— 整个回复就是一个有效的 JSON 对象。
 
+⚠ 兼容性硬规则（如果你将来要做"托管 URL 库"，必须遵守）：
+A. 类目代码 \`c\` 在 search/index.json 里**必须是数字**（1=怪物，2=法术，3=背景，4=物品，6=状态，7=专长，10=种族，14=神祇 …），**禁止**写成 \`"c":"monster"\` / \`"c":"spell"\` 这种字符串形式 —— 字符串形式本插件无法识别，详情面板会显示 \`?monster\`。
+B. 文件命名**必须是按来源切分**：\`data/bestiary/bestiary-<SOURCE>.json\` / \`data/spells/spells-<SOURCE>.json\` 等；**禁止**用 \`collection-XXX.json\` 这种把多类目塞一起 + 外层 \`_meta\` 包裹的合集格式 —— 本插件按"类目 → 来源 → 文件"映射查数据，合集文件找不到。
+C. 条目的 \`p\` 字段是**页码（数字）**，不是文件路径字符串。
+
 下面是我的资料：
 
-`;
+`,
+  en: `You are a D&D 5E data-format engineer. Convert the monster / spell / item content I paste below into a JSON file that conforms to the 5etools data spec, so it can be imported directly via "📁 Local content" in the OBR Suite plugin (no hosting required).
 
-const AI_PROMPT_MD_TEMPLATE = `你是一个 D&D 5E 数据格式工程师。请把我下面提供的怪物资料，转换为枭熊插件支持的 Markdown 格式（可直接通过"📁 本地内容 → 导入 MD 文件"导入，每个文件包含一个怪物）。
+Output requirements:
+1. Produce a single top-level JSON object with exactly one key:
+   - Monster: { "monster": [ {...}, {...} ] }
+   - Spell:   { "spell":   [ {...}, {...} ] }
+   - Item:    { "item":    [ {...}, {...} ] }
+2. Every entry must include at least:
+   - "name": display name (English is fine)
+   - "ENG_name": English name (use the same string as "name" if already English)
+   - "source": source abbreviation (any string, e.g. "HOMEBREW")
+   - "page": page number (use 0 if none)
+3. Monster entries additionally need: size (T/S/M/L/H/G), type, alignment, ac (array, e.g. [{"ac":18,"from":["plate armor"]}]), hp ({"average":63,"formula":"7d10 + 21"}), speed (object, e.g. {"walk":40,"fly":30}), str/dex/con/int/wis/cha six ability scores (integers), cr (string, e.g. "1/2", "4"), and optional arrays trait/action/reaction/legendary. Each trait/action is shaped {"name":"...","entries":["..."]}. The entries strings may use 5etools inline tags like {@dice 1d6}, {@damage 2d6+3}, {@hit 5}, {@dc 14}, {@atk mw}, {@h}.
+4. Spell entries additionally need: level (integer), school (A/C/D/E/I/N/T/V), time, range, components ({v, s, m}), duration, classes, entries.
+5. Item entries additionally need: type, weight, value, rarity, entries; weapons also dmg1, dmgType, property.
+6. **Do NOT** append search/index.json-style index records — local import auto-generates the index from the top-level array.
+7. **Do NOT** output explanatory text, Markdown fences, or any commentary — your entire reply must be one valid JSON object.
+
+⚠ Compatibility hard rules (mandatory if you ever ship this data as a hosted URL library):
+A. The category code \`c\` in search/index.json **must be NUMERIC** (1=monster, 2=spell, 3=background, 4=item, 6=condition, 7=feat, 10=race, 14=deity, …). **Never** write \`"c":"monster"\` / \`"c":"spell"\` as strings — the plugin can't resolve string category codes and will display \`?monster\` in the details panel.
+B. Files **must be split per-source**: \`data/bestiary/bestiary-<SOURCE>.json\` / \`data/spells/spells-<SOURCE>.json\` etc. **Do NOT** ship \`collection-XXX.json\` files that pack multiple categories together inside a top-level \`_meta\` wrapper — the plugin looks data up via category → source → file mapping and will never find collection files.
+C. The \`p\` field on an entry is a **numeric page number**, not a file path string.
+
+My content follows:
+
+`,
+};
+
+const AI_PROMPT_MD_TEMPLATE: Record<Language, string> = {
+  zh: `你是一个 D&D 5E 数据格式工程师。请把我下面提供的怪物资料，转换为枭熊插件支持的 Markdown 格式（可直接通过"📁 本地内容 → 导入 MD 文件"导入，每个文件包含一个怪物）。
 
 输出格式严格如下：
 
@@ -845,7 +918,59 @@ languages: Common
 
 下面是我的资料：
 
-`;
+`,
+  en: `You are a D&D 5E data-format engineer. Convert the monster content I paste below into the Markdown format the OBR Suite plugin supports (imported directly via "📁 Local content → Import MD file"; one monster per file).
+
+Output strictly in this shape:
+
+---
+name: Display Name
+ENG_name: English Name
+source: HOMEBREW
+page: 0
+size: M
+type: monstrosity
+alignment: U
+ac: 14 (natural armor)
+hp: 22 (5d4 + 10)
+speed: walk 40, fly 30, hover
+str: 6
+dex: 16
+con: 14
+int: 8
+wis: 12
+cha: 10
+cr: "1/2"
+senses: darkvision 60 ft., passive Perception 13
+languages: Common
+---
+
+## Traits
+### Feature Name
+Feature description. You may use 5etools inline tags like {@damage 1d4}.
+
+## Actions
+### Action Name
+{@atk mw} {@hit 5} to hit, reach 5 ft., one target. {@h}{@damage 2d6+3} damage.
+
+## Reactions
+### Reaction Name (optional)
+Reaction description.
+
+## Legendary Actions
+### Legendary Action Name (optional)
+Legendary action description.
+
+Rules:
+1. Frontmatter goes between top-level \`---\` markers in YAML \`key: value\` style. \`cr\` is a STRING ("1/2" / "4" / "12").
+2. \`ac\` is "number (source)" or just "number". \`hp\` is "average (formula)" or just "average". \`speed\` is comma-separated movement modes.
+3. \`## Traits\` / \`## Actions\` / \`## Reactions\` / \`## Legendary Actions\` are fixed section headers (the importer accepts both English and Chinese names). Inside each, use \`### Name\` subheaders for individual features / actions.
+4. Do NOT output any explanatory text — your entire reply must be the one .md file.
+
+My content follows:
+
+`,
+};
 
 // =====================================================================
 // Library preview / diagnostic
@@ -1164,7 +1289,10 @@ function escapeAttr(s: string): string {
 }
 
 function renderLocalContentBlock(lang: Language): string {
-  const files = getLocalFiles();
+  // Filter out files that originated from a URL subscription — those
+  // are displayed in their own block below, so showing them in both
+  // places would only confuse the user (which delete button is which?).
+  const files = getLocalFiles().filter((f) => !f.remoteUrl);
   const empty = lang === "zh"
     ? "<p class=\"lib-local-empty\">还没导入任何本地文件。</p>"
     : "<p class=\"lib-local-empty\">No local files imported yet.</p>";
@@ -1191,10 +1319,124 @@ function renderLocalContentBlock(lang: Language): string {
       ${buttons}
       <div class="lib-local-list">${files.length ? rows : empty}</div>
     </div>
+    ${renderRemoteSubsBlock(lang)}
   `;
 }
 
+/** Render the URL-subscription block. Each row corresponds to one
+ *  RemoteSubscription record; the actual fetched content is the
+ *  LocalFileMeta entry whose `remoteUrl` matches. We look that meta
+ *  up here so the row can show kind+count even when the file was
+ *  warmed from a prior session. */
+function renderRemoteSubsBlock(lang: Language): string {
+  const subs = getRemoteSubscriptions();
+  // Build a quick lookup: subscription URL → its LocalFileMeta (if any).
+  const allFiles = getLocalFiles();
+  const fileByUrl = new Map<string, LocalFileMeta>();
+  for (const f of allFiles) {
+    if (f.remoteUrl) fileByUrl.set(f.remoteUrl, f);
+  }
+  const head = lang === "zh"
+    ? `
+      <h3 class="lib-local-h" style="margin-top:18px">🔗 URL 订阅（自动更新）</h3>
+      <p class="lib-local-desc">粘贴一份单文件 5etools 风格 JSON 的 <b>原始 URL</b>（例如 GitHub raw 链接、jsDelivr 镜像），插件会下载并在每次会话启动时自动 <b>重新拉取</b>，作者更新的内容会自动到你的桌面上。每个客户端独立缓存。失败时会保留上次的内容并显示错误。</p>
+    `
+    : `
+      <h3 class="lib-local-h" style="margin-top:18px">🔗 URL subscriptions (auto-update)</h3>
+      <p class="lib-local-desc">Paste the <b>raw URL</b> of a single-file 5etools-shape JSON (e.g. a GitHub raw link or jsDelivr mirror). The suite downloads it and <b>re-fetches</b> on every session boot so author updates flow to your table automatically. Each client caches independently. On fetch failure the previous cached content is kept and the row shows the error.</p>
+    `;
+  const inputRow = isGM ? `
+    <div class="lib-local-actions" style="gap:6px;flex-wrap:wrap">
+      <input class="lib-sub-input" type="url" placeholder="${lang === "zh" ? "https://example.com/homebrew.json" : "https://example.com/homebrew.json"}" style="flex:1 1 240px;min-width:180px;padding:4px 6px">
+      <button class="lib-sub-add" type="button">${lang === "zh" ? "+ 添加订阅" : "+ Add subscription"}</button>
+      <button class="lib-sub-kiwee" type="button" title="${lang === "zh" ? "从 homebrew.kiwee.top 拉取中文社区精选自制内容索引（约 26 个包），逐一加入订阅。已经订阅的会跳过。" : "Pull the curated Chinese-community homebrew index from homebrew.kiwee.top (~26 packs) and subscribe to each. Already-subscribed URLs are skipped."}">${lang === "zh" ? "+ kiwee 推荐自制" : "+ kiwee curated"}</button>
+      ${subs.length > 0 ? `<button class="lib-sub-refresh-all" type="button">${lang === "zh" ? "🔄 刷新全部" : "🔄 Refresh all"}</button>` : ""}
+    </div>
+  ` : `<p class="role-notice">${lang === "zh" ? "玩家端只读 · 由 DM 设置" : "Read-only · Set by DM"}</p>`;
+  const empty = lang === "zh"
+    ? "<p class=\"lib-local-empty\">还没订阅任何 URL。</p>"
+    : "<p class=\"lib-local-empty\">No URL subscriptions yet.</p>";
+  const rows = subs.map((s) => subRowHtml(s, fileByUrl.get(s.url) ?? null, lang)).join("");
+  return `
+    <div class="lib-local lib-subs" style="margin-top:14px">
+      ${head}
+      ${inputRow}
+      <div class="lib-local-list">${subs.length ? rows : empty}</div>
+    </div>
+  `;
+}
+
+function subRowHtml(s: RemoteSubscription, meta: LocalFileMeta | null, lang: Language): string {
+  const disable = isGM ? "" : "disabled";
+  // Display label = filename derived from URL if meta exists, else the
+  // URL trimmed. Tooltip always shows the full URL.
+  let display: string;
+  if (meta) {
+    display = meta.filename;
+  } else {
+    try {
+      const u = new URL(s.url);
+      const last = u.pathname.split("/").filter(Boolean).pop();
+      display = last ? decodeURIComponent(last) : u.hostname;
+    } catch {
+      display = s.url.slice(0, 60);
+    }
+  }
+  let metaLine: string;
+  if (meta) {
+    const kindStr = buildKindLabel(meta, lang);
+    const when = s.lastFetchedAt ? formatSubTime(s.lastFetchedAt, lang) : (lang === "zh" ? "刚刚" : "just now");
+    metaLine = `${escapeAttr(kindStr)} · ${meta.count} · ${escapeAttr(when)}`;
+  } else if (s.lastError) {
+    metaLine = lang === "zh" ? "❌ 未获取" : "❌ Not fetched";
+  } else {
+    metaLine = lang === "zh" ? "⏳ 等待获取" : "⏳ Pending";
+  }
+  const errAttr = s.lastError ? ` title="${escapeAttr(s.lastError)}"` : "";
+  const errClass = s.lastError ? " lib-sub-row-err" : "";
+  return `
+    <div class="lib-local-row lib-sub-row${errClass}" data-sub-url="${escapeAttr(s.url)}"${errAttr}>
+      <span class="lib-local-name" title="${escapeAttr(s.url)}">🔗 ${escapeAttr(display)}</span>
+      <span class="lib-local-meta">${metaLine}</span>
+      ${isGM ? `
+        <button class="lib-sub-refresh" type="button" ${disable} title="${lang === "zh" ? "立即重新获取" : "Re-fetch now"}">🔄</button>
+        <button class="lib-sub-del" type="button" ${disable} title="${lang === "zh" ? "取消订阅并删除缓存" : "Unsubscribe and delete cache"}">✕</button>
+      ` : ""}
+    </div>
+  `;
+}
+
+function formatSubTime(ts: number, lang: Language): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  if (sameDay) {
+    return lang === "zh" ? `今天 ${hh}:${mm}` : `today ${hh}:${mm}`;
+  }
+  const mon = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${mon}-${day} ${hh}:${mm}`;
+}
+
 function localFileRowHtml(f: LocalFileMeta, lang: Language): string {
+  const kindStr = buildKindLabel(f, lang);
+  const disable = isGM ? "" : "disabled";
+  return `
+    <div class="lib-local-row" data-local-id="${escapeAttr(f.id)}">
+      <span class="lib-local-name" title="${escapeAttr(f.filename)}">${escapeAttr(f.filename)}</span>
+      <span class="lib-local-meta">${escapeAttr(kindStr)} · ${f.count}</span>
+      ${isGM ? `<button class="lib-local-del" type="button" ${disable} title="${lang === "zh" ? "删除" : "Delete"}">✕</button>` : ""}
+    </div>
+  `;
+}
+
+/** Build the "怪物 · 411" / "怪物 + 4 类 · 542" label for a local
+ *  file row. Multi-kind packs (kiwee homebrew etc.) show the primary
+ *  kind plus a "+ N 类" suffix so the user can tell at a glance
+ *  whether a pack is single- or multi-category. */
+function buildKindLabel(f: LocalFileMeta, lang: Language): string {
   const kindLabel: Record<string, string> = lang === "zh" ? {
     monster: "怪物", spell: "法术", item: "物品", feat: "专长", race: "种族",
     background: "背景", optionalfeature: "能力", condition: "状态", vehicle: "载具",
@@ -1210,15 +1452,12 @@ function localFileRowHtml(f: LocalFileMeta, lang: Language): string {
     cult: "Cult", boon: "Boon", disease: "Disease", table: "Table",
     action: "Action", recipe: "Recipe", deck: "Deck",
   };
-  const kindStr = kindLabel[f.kind] || f.kind;
-  const disable = isGM ? "" : "disabled";
-  return `
-    <div class="lib-local-row" data-local-id="${escapeAttr(f.id)}">
-      <span class="lib-local-name" title="${escapeAttr(f.filename)}">${escapeAttr(f.filename)}</span>
-      <span class="lib-local-meta">${escapeAttr(kindStr)} · ${f.count}</span>
-      ${isGM ? `<button class="lib-local-del" type="button" ${disable} title="${lang === "zh" ? "删除" : "Delete"}">✕</button>` : ""}
-    </div>
-  `;
+  const primary = kindLabel[f.kind] || f.kind;
+  if (f.kinds && f.kinds.length > 1) {
+    const extra = f.kinds.length - 1;
+    return lang === "zh" ? `${primary} +${extra} 类` : `${primary} +${extra} more`;
+  }
+  return primary;
 }
 
 // One-click preset: the official 5etools ENGLISH source repo, served via
@@ -1336,14 +1575,22 @@ Any creature within 5 ft. takes {@damage 1d4} cold damage at the start of its tu
 ### Frost Touch
 {@atk ms} {@hit 5}, reach 5 ft., one target. {@h}{@damage 2d6+3} cold damage.</code></pre>
 
+        <div class="lib-warn" style="margin-top:10px">
+          <b>⚠ 兼容性硬规则</b>（写"托管 URL 库"时务必遵守，否则插件无法识别）：<br>
+          • search/index.json 里每条 <code>"c"</code> <b>必须是数字</b>（1=怪物 / 2=法术 / 3=背景 / 4=物品 / 6=状态 / 7=专长 / 10=种族 / 14=神祇 …）。写成 <code>"c":"monster"</code> 这种字符串形式会导致详情面板显示 <code>?monster</code>，怪物图鉴也搜不到。<br>
+          • 数据文件**按来源切分**为 <code>data/bestiary/bestiary-&lt;SOURCE&gt;.json</code> / <code>data/spells/spells-&lt;SOURCE&gt;.json</code> 等。**不要**用 <code>collection-XXX.json</code> 这种把多类目塞一个文件 + 外层 <code>_meta</code> 包裹的合集格式 —— 插件只按"类目→来源→文件"映射查数据。<br>
+          • 条目的 <code>p</code> 字段是<b>页码（数字）</b>，不是文件路径字符串。<br>
+          • CORS 头必须开放（<code>Access-Control-Allow-Origin: *</code>）。GitHub raw 文件用 <b>jsDelivr</b>（<code>cdn.jsdelivr.net/gh/&lt;user&gt;/&lt;repo&gt;@&lt;branch&gt;</code>）通常最稳。
+        </div>
+
         <h4>AI 提示词（JSON 版）</h4>
         <p>粘贴给 ChatGPT / Claude / DeepSeek / 通义千问 等模型，把怪物 / 法术 / 物品资料贴在末尾，模型会输出可直接导入的 JSON 文件。</p>
-        <textarea class="lib-prompt" readonly>${escapeAttr(AI_PROMPT_TEMPLATE)}</textarea>
+        <textarea class="lib-prompt" readonly>${escapeAttr(AI_PROMPT_TEMPLATE[lang])}</textarea>
         <button class="lib-prompt-copy" type="button">复制 JSON 提示词</button>
 
         <h4>AI 提示词（MD 版，单怪物）</h4>
         <p>如果你想让 AI 输出更人类可读的 Markdown 格式（适合一次只录一个怪物，方便事后用任意编辑器修改）：</p>
-        <textarea class="lib-prompt-md" readonly>${escapeAttr(AI_PROMPT_MD_TEMPLATE)}</textarea>
+        <textarea class="lib-prompt-md" readonly>${escapeAttr(AI_PROMPT_MD_TEMPLATE[lang])}</textarea>
         <button class="lib-prompt-md-copy" type="button">复制 MD 提示词</button>
 
         <p style="color:#9ab;font-size:11px;margin-top:8px">本地导入失败时多半是 JSON 解析错（多 / 少逗号、引号没闭合）；URL 库加载失败开浏览器 DevTools 看 Network 面板，常见是 CORS / 404 / JSON 格式错误。</p>
@@ -1387,10 +1634,18 @@ Any creature within 5 ft. takes {@damage 1d4} cold damage at the start of its tu
   ]
 }</code></pre>
 
+        <div class="lib-warn" style="margin-top:10px">
+          <b>⚠ Compatibility hard rules</b> for hosted URL libraries (the plugin can't consume libraries that violate these):<br>
+          • Every entry in search/index.json must have a <b>NUMERIC</b> <code>"c"</code> field (1=monster / 2=spell / 3=background / 4=item / 6=condition / 7=feat / 10=race / 14=deity / …). String forms like <code>"c":"monster"</code> render as <code>?monster</code> in the details panel and the bestiary won't find the entry.<br>
+          • Data files must be <b>split per-source</b>: <code>data/bestiary/bestiary-&lt;SOURCE&gt;.json</code> / <code>data/spells/spells-&lt;SOURCE&gt;.json</code> etc. <b>Do NOT</b> use <code>collection-XXX.json</code> wrappers that pack multiple categories into one file with a top-level <code>_meta</code> block — the plugin resolves data via category → source → file mapping only.<br>
+          • The <code>p</code> field on an entry is a <b>numeric page number</b>, not a file path string.<br>
+          • CORS headers must be permissive (<code>Access-Control-Allow-Origin: *</code>). For GitHub-hosted data, <b>jsDelivr</b> (<code>cdn.jsdelivr.net/gh/&lt;user&gt;/&lt;repo&gt;@&lt;branch&gt;</code>) is usually the most reliable CDN.
+        </div>
+
         <h4>AI prompts</h4>
-        <textarea class="lib-prompt" readonly>${escapeAttr(AI_PROMPT_TEMPLATE)}</textarea>
+        <textarea class="lib-prompt" readonly>${escapeAttr(AI_PROMPT_TEMPLATE[lang])}</textarea>
         <button class="lib-prompt-copy" type="button">Copy JSON prompt</button>
-        <textarea class="lib-prompt-md" readonly>${escapeAttr(AI_PROMPT_MD_TEMPLATE)}</textarea>
+        <textarea class="lib-prompt-md" readonly>${escapeAttr(AI_PROMPT_MD_TEMPLATE[lang])}</textarea>
         <button class="lib-prompt-md-copy" type="button">Copy MD prompt</button>
       </div>
     </details>
@@ -1695,6 +1950,182 @@ function wireLibrariesBody(root: HTMLElement): void {
       try {
         OBR.broadcast.sendMessage(BC_LOCAL_CONTENT_CHANGED, {}, { destination: "LOCAL" });
       } catch {}
+      renderContent();
+    });
+  });
+
+  // ─── URL subscription wiring ───────────────────────────────────
+  const subInput = root.querySelector<HTMLInputElement>(".lib-sub-input");
+  const subAddBtn = root.querySelector<HTMLButtonElement>(".lib-sub-add");
+  const subRefreshAllBtn = root.querySelector<HTMLButtonElement>(".lib-sub-refresh-all");
+
+  const notifyContentChanged = async () => {
+    try {
+      await OBR.broadcast.sendMessage(BC_LOCAL_CONTENT_CHANGED, {}, { destination: "LOCAL" });
+    } catch {}
+  };
+
+  subAddBtn?.addEventListener("click", async () => {
+    if (!isGM || !subInput) return;
+    const url = subInput.value.trim();
+    if (!url) {
+      window.alert(getLocalLang() === "zh" ? "请先输入 URL" : "Please enter a URL first");
+      return;
+    }
+    subAddBtn.disabled = true;
+    const oldLabel = subAddBtn.textContent;
+    subAddBtn.textContent = getLocalLang() === "zh" ? "⏳ 获取中…" : "⏳ Fetching…";
+    try {
+      const r = await addRemoteSubscription(url);
+      if (!r.ok) {
+        // The subscription is persisted even on first-fetch failure
+        // (see addRemoteSubscription docs) — so we still re-render so
+        // the user sees the row with its error and can retry. Only
+        // alert when the validation rejected the URL outright (no sub
+        // was created at all).
+        if (!r.sub) {
+          window.alert(`${getLocalLang() === "zh" ? "订阅失败：" : "Subscribe failed: "}${r.error}`);
+        } else {
+          window.alert(`${getLocalLang() === "zh" ? "首次拉取失败（已加入订阅，稍后可点 🔄 重试）：" : "First fetch failed (subscription saved — click 🔄 to retry): "}${r.error}`);
+        }
+      } else {
+        subInput.value = "";
+        await notifyContentChanged();
+      }
+    } catch (e: any) {
+      window.alert(`${getLocalLang() === "zh" ? "订阅失败：" : "Subscribe failed: "}${e?.message || String(e)}`);
+    } finally {
+      subAddBtn.disabled = false;
+      subAddBtn.textContent = oldLabel;
+      renderContent();
+    }
+  });
+
+  // Enter key in the input triggers add.
+  subInput?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      subAddBtn?.click();
+    }
+  });
+
+  // 2026-05-27 — "+ kiwee 推荐自制" one-click preset. Fetches kiwee's
+  // _generated/index-sources.json (the curated CN-localised homebrew
+  // listing) and subscribes to every unique path. Idempotent —
+  // addRemoteSubscription rejects URLs already in the list, so
+  // re-clicking only picks up packs kiwee added since last time.
+  const subKiweeBtn = root.querySelector<HTMLButtonElement>(".lib-sub-kiwee");
+  subKiweeBtn?.addEventListener("click", async () => {
+    if (!isGM) return;
+    subKiweeBtn.disabled = true;
+    const oldLabel = subKiweeBtn.textContent;
+    const lang = getLocalLang();
+    subKiweeBtn.textContent = lang === "zh" ? "⏳ 拉取索引…" : "⏳ Loading index…";
+    try {
+      const res = await fetch("https://homebrew.kiwee.top/_generated/index-sources.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const idx = await res.json();
+      if (!idx || typeof idx !== "object") throw new Error("invalid index shape");
+      // Map: source code → path. Dedupe by path so SterlingVermin and
+      // SterlingVermin:Patreon (same file) only subscribe once.
+      const uniquePaths = new Set<string>();
+      for (const v of Object.values(idx)) {
+        if (typeof v === "string" && v.length > 0) uniquePaths.add(v);
+      }
+      const urls = [...uniquePaths].map((p) => {
+        // Each path segment may contain spaces / semicolons / CJK —
+        // encodeURIComponent each segment but keep the `/` separators.
+        const encoded = p.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+        return `https://homebrew.kiwee.top/${encoded}`;
+      });
+      let added = 0;
+      let skipped = 0;
+      let failed = 0;
+      let i = 0;
+      for (const url of urls) {
+        i++;
+        subKiweeBtn.textContent = lang === "zh"
+          ? `⏳ ${i}/${urls.length} 订阅中…`
+          : `⏳ ${i}/${urls.length} subscribing…`;
+        const r = await addRemoteSubscription(url);
+        if (r.ok) added++;
+        else if (r.error && /已经订阅|Already subscribed/.test(r.error)) skipped++;
+        else failed++;
+      }
+      await notifyContentChanged();
+      const summary = lang === "zh"
+        ? `kiwee 推荐自制：新增 ${added}，已订阅跳过 ${skipped}，失败 ${failed}。`
+        : `kiwee curated: ${added} added, ${skipped} already subscribed, ${failed} failed.`;
+      window.alert(summary);
+    } catch (e: any) {
+      window.alert(`${lang === "zh" ? "拉取 kiwee 索引失败：" : "Failed to load kiwee index: "}${e?.message || String(e)}`);
+    } finally {
+      subKiweeBtn.disabled = false;
+      subKiweeBtn.textContent = oldLabel;
+      renderContent();
+    }
+  });
+
+  subRefreshAllBtn?.addEventListener("click", async () => {
+    if (!isGM) return;
+    subRefreshAllBtn.disabled = true;
+    const oldLabel = subRefreshAllBtn.textContent;
+    subRefreshAllBtn.textContent = getLocalLang() === "zh" ? "⏳ 刷新中…" : "⏳ Refreshing…";
+    try {
+      // force=true so we bypass the per-session memoisation; the user
+      // explicitly asked to refresh now, so the "skip if fetched
+      // recently" logic should not apply here.
+      await refreshStaleSubscriptions(true);
+      await notifyContentChanged();
+    } catch (e: any) {
+      console.warn("[obr-suite/settings] refreshStaleSubscriptions failed", e);
+    } finally {
+      subRefreshAllBtn.disabled = false;
+      subRefreshAllBtn.textContent = oldLabel;
+      renderContent();
+    }
+  });
+
+  root.querySelectorAll<HTMLButtonElement>(".lib-sub-refresh").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!isGM) return;
+      const row = btn.closest<HTMLDivElement>(".lib-sub-row");
+      const url = row?.dataset.subUrl;
+      if (!url) return;
+      btn.disabled = true;
+      const oldText = btn.textContent;
+      btn.textContent = "⏳";
+      try {
+        const r = await refreshRemoteSubscription(url);
+        if (!r.ok) {
+          window.alert(`${getLocalLang() === "zh" ? "刷新失败：" : "Refresh failed: "}${r.error}`);
+        } else {
+          await notifyContentChanged();
+        }
+      } catch (e: any) {
+        window.alert(`${getLocalLang() === "zh" ? "刷新失败：" : "Refresh failed: "}${e?.message || String(e)}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
+        renderContent();
+      }
+    });
+  });
+
+  root.querySelectorAll<HTMLButtonElement>(".lib-sub-del").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!isGM) return;
+      const row = btn.closest<HTMLDivElement>(".lib-sub-row");
+      const url = row?.dataset.subUrl;
+      if (!url) return;
+      const ok = window.confirm(
+        getLocalLang() === "zh"
+          ? "取消此订阅？将同时删除已缓存的内容（搜索 / 怪物图鉴里相应条目会消失）。"
+          : "Unsubscribe? This will also delete the cached content (related entries in search / bestiary will disappear).",
+      );
+      if (!ok) return;
+      await removeRemoteSubscription(url);
+      await notifyContentChanged();
       renderContent();
     });
   });
@@ -2267,6 +2698,13 @@ const TABS: TabDef[] = [
     body: CIRCLEIMAGE_DESC,
   },
   {
+    id: "transform",
+    zh: `${ICONS.sparkles} 变身`,
+    en: `${ICONS.sparkles} Transform`,
+    moduleId: "transform",
+    body: TRANSFORM_DESC,
+  },
+  {
     id: "follow",
     zh: `${ICONS.follow} 跟随`,
     en: `${ICONS.follow} Follow`,
@@ -2613,13 +3051,13 @@ const TABS: TabDef[] = [
       zh: `<p><b>全屏追踪</b>：状态、buff 一站式管理。</p>
 <ul>
   <li><b>打开</b>：Select 工具下按 <kbd>]</kbd>，或点击工具栏的状态追踪按钮</li>
-  <li><b>右下调色板</b>：拖状态到角色 = 应用；状态文字会以弧形气泡浮在 token 头顶</li>
+  <li><b>右下调色板</b>：左键点状态 = 选中，再左键点角色 = 应用 / 切换；右键取消选中。状态文字会以弧形气泡浮在 token 头顶</li>
   <li>已应用的 buff <b>拖到别人</b> = 转移，<b>拖到空白</b> = 删除</li>
 </ul>`,
       en: `<p><b>Full-screen tracker</b> for status effects + buffs — one place to manage them all.</p>
 <ul>
   <li><b>Open</b>: press <kbd>]</kbd> while in the Select tool, or click the toolbar action</li>
-  <li><b>Bottom-right palette</b>: drag a status onto a character to apply it. The buff label appears as an arc-style bubble above the token</li>
+  <li><b>Bottom-right palette</b>: left-click a status to select it, then left-click a character to apply / toggle it; right-click cancels selection. The buff label appears as an arc-style bubble above the token</li>
   <li>Applied buffs: <b>drag to another</b> = transfer, <b>drag to empty space</b> = remove</li>
 </ul>`,
     },
@@ -3082,6 +3520,7 @@ function moduleLabelKey(id: ModuleId): string {
     case "circleImage": return lang === "zh" ? "圆形图片" : "Circle Image";
     case "follow": return lang === "zh" ? "跟随" : "Follow";
     case "musicBoard": return lang === "zh" ? "音乐板" : "Music Board";
+    case "transform": return lang === "zh" ? "变身" : "Transform";
   }
 }
 

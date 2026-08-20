@@ -16,6 +16,7 @@
 import OBR, { isPath, type Item } from "@owlbear-rodeo/sdk";
 import { assetUrl } from "../../asset-base";
 import { getLocalLang } from "../../state";
+import { STABLE_HIDES } from "../../feature-flags";
 import { CTX_EDIT_FOG, MODAL_ID, PLUGIN_ID, FOG_PATH_KEY, FOG_WALL_EXPAND_KEY } from "./types";
 import { buildFogWalls } from "./output/obrWalls";
 import { samplePathCommands } from "./output/samplePath";
@@ -56,8 +57,19 @@ async function syncLocalWalls(): Promise<void> {
       // Paths from the now-removed edge-feather feature — skip
       // them so we don't double-count walls (outer matches
       // outline; inner gives wrong, eroded wall geometry).
+      // 2026-05-26 (Phase D) — also skip "door" kind. Doors are
+      // dynamic-fog-managed: that plugin watches FOG-layer Drawings
+      // and produces the Wall items itself, honouring the door's
+      // open/closed state (open ⇒ no wall). If our watcher ALSO
+      // derived a wall from the door's commands it would (a)
+      // double-block vision when closed (two overlapping walls),
+      // and (b) STILL block vision when open (our watcher ignores
+      // door metadata), defeating the door entirely — which also
+      // makes every toggle slow because both wall systems
+      // recompute on each change.
       const kind = md[FOG_PATH_KIND_KEY];
       if (kind === "darkFog-outer" || kind === "darkFog-inner") return false;
+      if (kind === "door") return false;
       return true;
     });
   } catch (e) {
@@ -279,19 +291,24 @@ export async function setupFullFog(): Promise<void> {
   // Kick off an initial sync (idempotent).
   scheduleWallSync();
 
-  // Light subsystem — 添加光源 / 光源设置 / 移除光源 context menu
-  // + a watcher that mirrors any token tagged with LIGHT_KEY into a
-  // native OBR `Light` item via `buildLight()` in scene.local. The
-  // native Light items integrate with OBR's fog/visibility renderer
-  // automatically, so filling fog via the OBR fog tool now produces
-  // proper illumination + wall-clipping (matches the upstream
-  // dynamic-fog plugin's behaviour).
-  await setupLight();
+  // 2026-05-26 — light + dev door tool modes are gated on
+  // !STABLE_HIDES. Stable promotion keeps ONLY the "edit map fog"
+  // context menu; the in-canvas door/window tool modes are being
+  // replaced by an in-editor door tool that produces dynamic-fog-
+  // compatible Path + door-metadata items, and the light subsystem
+  // is dropped from stable per user request (it overlaps with what
+  // the upstream dynamic-fog plugin provides).
+  if (!STABLE_HIDES) {
+    // Light subsystem — 添加光源 / 光源设置 / 移除光源 context menu
+    // + a watcher that mirrors any token tagged with LIGHT_KEY into a
+    // native OBR `Light` item via `buildLight()` in scene.local.
+    await setupLight();
 
-  // Door / window tool modes (under OBR's native fog tool) +
-  // per-client overlay watcher that paints red/green/blue
-  // indicators along the openings the GM has placed.
-  await setupFullFogDoor();
+    // Dev-only Door / window tool modes (under OBR's native fog
+    // tool). The new in-editor door tool (planned) replaces this for
+    // stable users.
+    await setupFullFogDoor();
+  }
 
   registered = true;
 }
@@ -309,8 +326,10 @@ export async function teardownFullFog(): Promise<void> {
     try { await OBR.scene.local.deleteItems(allIds); } catch {}
   }
   wallsByPath.clear();
-  await teardownLight();
-  await teardownFullFogDoor();
+  if (!STABLE_HIDES) {
+    await teardownLight();
+    await teardownFullFogDoor();
+  }
   registered = false;
 }
 

@@ -135,8 +135,8 @@ let ccRole: "GM" | "PLAYER" = "PLAYER";
 
 function isAutoInfoEnabled(): boolean {
   try {
-    return localStorage.getItem(AUTO_INFO_KEY) !== "0";
-  } catch { return true; }
+    return localStorage.getItem(AUTO_INFO_KEY) === "1";
+  } catch { return false; }
 }
 
 // The main panel opens as a SIZED modal (NOT fullScreen), leaving a
