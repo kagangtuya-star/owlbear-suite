@@ -2,6 +2,19 @@
 
 All notable changes to this project follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.11] — 2026-08-20
+
+> Note: 1.0.8 – 1.1.10 shipped without changelog entries; resuming the log here.
+
+### Added
+
+- **Settings → Bestiary → "Repair legacy image URLs" one-click button (DM only).** Scenes created before the 1.1.10 kiwee migration have tokens whose baked-in image URL still points at the retired `obr.dnd.center/5etools-img` proxy. The button rewrites every legacy token image URL **and every transform-snapshot URL** in the current scene to `https://5e.kiwee.top/img`; custom / external images are untouched. Run once per affected scene. Includes an in-flight guard (mid-repair re-renders can't resurrect a clickable button), a scene-ready check before the confirm dialog, and an old→new evidence log in the console. (`src/modules/bestiary/repair-legacy-images.ts`)
+
+### Fixed
+
+- **World-pack import migrates legacy image URLs.** `.fobr` packs exported before the kiwee migration carry the retired proxy verbatim; the importer's rewrite pass now migrates token images and transform snapshots on the way in, so importing an old archive no longer resurrects dead image URLs. (`src/modules/worldPack/importer.ts`)
+- **Settings popover tracks GM-role changes live.** `isGM` used to be sampled once at open; a player promoted to GM mid-session had to reopen the popover to see GM-only controls (module toggles, repair buttons). Now subscribes to `OBR.player.onChange` and re-renders on role change; `getRole` failures are logged instead of silently swallowed.
+
 ## [Unreleased — dev branch]
 
 ### Changed

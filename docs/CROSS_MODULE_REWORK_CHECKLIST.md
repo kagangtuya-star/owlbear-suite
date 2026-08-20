@@ -111,12 +111,15 @@
 - [x] Suite 与旧独立 Bestiary 源码中的内部怪物图片地址改为 `https://5e.kiwee.top/img`。
 - [x] Commoner 备用图片同步改到 kiwee，不再回到失效的 5e.tools 代理。
 - [x] stable `1.1.10` 已发布，线上构建产物不再包含旧图片代理地址。
-- [ ] 在 dev 真实生成 Bat、Swarm of Bats、Hell Hound 和不同资料来源怪物，确认图片、拖拽生成和 OBR 场景纹理均正常。
+- [x] 设置 → 怪物图鉴新增「修复旧图片地址」一键按钮（仅 DM）：把当前场景 token 图片与变身快照中的 `obr.dnd.center/5etools-img` 前缀改写为 `https://5e.kiwee.top/img`，逐场景执行，自定义/外链图片不动（`src/modules/bestiary/repair-legacy-images.ts`）。含防重入守卫（修复中重渲染不会复活可点按钮）、先检查场景 ready 再弹确认框、控制台留 old→new 证据日志。
+- [x] 世界包导入同步迁移：旧版导出的 `.fobr` 包原样携带失效代理地址，导入时（Pass-1）自动把 item 图片与变身快照里的旧前缀改写为 kiwee，避免导入旧存档后重新出现死图（`src/modules/worldPack/importer.ts`）。
+- [ ] 在旧场景实测一键修复：修复后 token 纹理恢复、解除变身不再回退到失效地址、修复计数与控制台 evidence 日志一致；再导入一个迁移前导出的 `.fobr` 包验证图片正常。
+- [x] 验证 kiwee 图片源有效（2026-08-20，用户确认按此标准验收）：Bat / Swarm of Bats / Hell Hound / Commoner 的 token URL 均返回 200 + `image/webp` + `Access-Control-Allow-Origin: *`，`search/index.json` 正常——满足 OBR WebGL 纹理加载的跨域要求。
 
 ## 最终验收
 
 - [ ] TypeScript 类型检查通过。
-- [ ] 生产构建通过，且产物中不再出现 `obr.dnd.center/5etools-img`。
+- [ ] 生产构建通过，且产物中不再把 `obr.dnd.center/5etools-img` 用作图片来源（注意：settings chunk 会包含该字符串——那是「修复旧图片地址」按钮的匹配前缀和说明文案，属预期；验收时确认它只出现在 settings 产物里即可）。
 - [ ] DM + 两名玩家完成状态、权限、先攻、投骰、变身和传送门回归。
 - [ ] 明暗主题各检查一次主要面板和全部透明 overlay。
 - [ ] 断网、上游 403、图片 404、广播失败和写入失败都有明确可见的错误证据。

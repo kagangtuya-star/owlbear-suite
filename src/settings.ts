@@ -46,6 +46,7 @@ import {
   type RemoteSubscription,
 } from "./utils/localContent";
 import { repairLegacyHiddenBubbles } from "./modules/bubbles";
+import { repairLegacyBestiaryImages } from "./modules/bestiary/repair-legacy-images";
 
 // Merged Settings + About panel.
 //
@@ -93,6 +94,11 @@ interface TabDef {
 
 let activeTab = "support";
 let isGM = false;
+// True while the bestiary legacy-image repair is running. renderContent()
+// rebuilds the tab's innerHTML on any state change, which would otherwise
+// resurrect an enabled idle button mid-repair (the handler's disabled flag
+// only lives on the detached old node) and allow a concurrent second run.
+let bestiaryImageRepairInFlight = false;
 // 2026-05-14 (#4) — these bubble settings all live in DM-synced scene
 // metadata now (only 气泡大小 / scale stays per-client localStorage).
 // Mirrored into module vars for synchronous render reads.
@@ -2407,7 +2413,82 @@ const TABS: TabDef[] = [
     // popover header). Settings page just shows the description now;
     // the GM flips the option inline while spawning instead of
     // hunting for it in a Settings tab.
-    body: BESTIARY_DESC,
+    dynamicBody: (lang) => {
+      const desc = lang === "zh" ? BESTIARY_DESC.zh : BESTIARY_DESC.en;
+      // DM-only maintenance: scenes older than the 1.1.10 kiwee image
+      // migration have tokens whose baked-in image URL still points at
+      // the retired obr.dnd.center proxy.
+      const maintenance = isGM
+        ? `
+        <h3 style="margin-top:14px">${lang === "zh" ? "维护" : "Maintenance"}</h3>
+        <div class="row">
+          <div class="lbl">
+            ${lang === "zh" ? "修复旧图片地址" : "Repair legacy image URLs"}
+            <div class="desc"><em>${lang === "zh"
+              ? `图片源已从失效的 <code>obr.dnd.center/5etools-img</code> 代理迁移到 <code>5e.kiwee.top</code>。迁移前生成的怪物 token（包括旧独立版图鉴生成的）仍引用旧地址，图片会加载失败。点击后把当前场景所有 token 图片和变身快照里的旧地址改写为 kiwee 镜像；自定义 / 外链图片不受影响。每个场景需要单独点一次。`
+              : `The image source moved from the retired <code>obr.dnd.center/5etools-img</code> proxy to <code>5e.kiwee.top</code>. Monster tokens spawned before the migration (including ones from the old standalone Bestiary) still reference the old proxy and fail to load. Clicking rewrites every legacy token image URL and transform-snapshot URL in the current scene to the kiwee mirror; custom / external images are untouched. Run this once per scene.`}</em></div>
+          </div>
+          <button data-key="bestiaryRepairLegacyImages" class="reset-panels-btn" type="button" ${
+            bestiaryImageRepairInFlight ? "disabled" : ""
+          }>${
+            bestiaryImageRepairInFlight
+              ? (lang === "zh" ? "修复中…" : "Repairing…")
+              : (lang === "zh" ? "修复当前场景" : "Repair current scene")
+          }</button>
+        </div>`
+        : "";
+      return `${desc}${maintenance}`;
+    },
+    afterRender: (root) => {
+      // DM-only one-shot repair: rewrites legacy obr.dnd.center image
+      // URLs (token images + transform snapshots) to the kiwee mirror.
+      const repairBtn = root.querySelector<HTMLButtonElement>('button[data-key="bestiaryRepairLegacyImages"]');
+      if (repairBtn && isGM) {
+        repairBtn.addEventListener("click", async () => {
+          if (repairBtn.disabled || bestiaryImageRepairInFlight) return;
+          const lang = getLocalLang();
+          // Cheap gate first — don't make the DM read and confirm a
+          // two-paragraph dialog only to learn no scene is open.
+          const ready = await OBR.scene.isReady().catch(() => false);
+          if (!ready) {
+            const noScene = lang === "zh" ? "请先打开一个场景再修复。" : "Open a scene first, then repair.";
+            try { await OBR.notification.show(noScene, "WARNING"); } catch { window.alert(noScene); }
+            return;
+          }
+          const confirmMsg = lang === "zh"
+            ? "确认修复当前场景的旧图片地址？\n\n只会改写 obr.dnd.center/5etools-img 前缀的地址（token 图片 + 变身快照），改写为 5e.kiwee.top 镜像。自定义图片不受影响。"
+            : "Repair legacy image URLs in the current scene?\n\nOnly URLs with the obr.dnd.center/5etools-img prefix are rewritten (token images + transform snapshots) to the 5e.kiwee.top mirror. Custom images are untouched.";
+          if (!window.confirm(confirmMsg)) return;
+          const origText = repairBtn.textContent ?? "";
+          bestiaryImageRepairInFlight = true;
+          repairBtn.disabled = true;
+          repairBtn.textContent = lang === "zh" ? "修复中…" : "Repairing…";
+          try {
+            const { imagesTouched, snapshotsTouched, total } = await repairLegacyBestiaryImages();
+            const ok = lang === "zh"
+              ? (imagesTouched + snapshotsTouched === 0
+                  ? `没有发现旧图片地址（共扫描 ${total} 个物件）。`
+                  : `已修复 ${imagesTouched} 个 token 图片、${snapshotsTouched} 个变身快照（共扫描 ${total} 个物件）。`)
+              : (imagesTouched + snapshotsTouched === 0
+                  ? `No legacy image URLs found (scanned ${total} items).`
+                  : `Repaired ${imagesTouched} token image${imagesTouched === 1 ? "" : "s"} and ${snapshotsTouched} transform snapshot${snapshotsTouched === 1 ? "" : "s"} (scanned ${total} items).`);
+            try { await OBR.notification.show(ok, "SUCCESS"); } catch { window.alert(ok); }
+          } catch (e) {
+            console.error("[obr-suite/settings] bestiary image repair failed", e);
+            const fail = lang === "zh" ? "修复失败，请查看 DevTools 控制台。" : "Repair failed — see DevTools console.";
+            try { await OBR.notification.show(fail, "ERROR"); } catch { window.alert(fail); }
+          } finally {
+            bestiaryImageRepairInFlight = false;
+            // The tab may have re-rendered mid-repair, leaving this
+            // closure's node detached — restore it (harmless if so)
+            // and re-render the live view to pick up the idle state.
+            repairBtn.disabled = false;
+            repairBtn.textContent = origText;
+            if (activeTab === "bestiary") renderContent();
+          }
+        });
+      }
+    },
   },
   {
     id: "characterCards",
@@ -3622,7 +3703,23 @@ langEnEl.addEventListener("click", () => {
 });
 
 OBR.onReady(async () => {
-  try { isGM = (await OBR.player.getRole()) === "GM"; } catch {}
+  try {
+    isGM = (await OBR.player.getRole()) === "GM";
+  } catch (e) {
+    // Falls back to PLAYER view until a role-change event corrects it:
+    // GM-only controls (module toggles, repair buttons) stay hidden.
+    console.warn("[obr-suite/settings] getRole failed — rendering as PLAYER", e);
+  }
+  // Track role changes live so GM-only controls (module toggles, repair
+  // buttons, …) appear/disappear without reopening the popover — the
+  // initial getRole above is only a snapshot at open time.
+  OBR.player.onChange((p) => {
+    const next = p.role === "GM";
+    if (next !== isGM) {
+      isGM = next;
+      renderContent();
+    }
+  });
   // 2026-05-10 — warm the IDB-backed local-content cache before the
   // first render so the "📁 本地内容" list isn't empty for ~50 ms
   // after open. Idempotent: subsequent calls share the same promise.
