@@ -118,7 +118,8 @@ function buildBubbleInner(entry: HistoryEntry): string {
       const end = r + 1 < rows.length ? rows[r + 1] : entry.dice.length;
       const slice = entry.dice.slice(start, end);
       const kept = slice.filter((d) => !d.loser);
-      const rowSum = kept.reduce((a, d) => a + d.value, 0) + entry.modifier;
+      // §9 consistency fix: subtraction dice count negative in row totals.
+      const rowSum = kept.reduce((a, d) => a + (d.subtract ? -d.value : d.value), 0) + entry.modifier;
       out.push(
         `<div class="row1 repeat-row">` +
         `<span class="repeat-idx">#${r + 1}</span>` +

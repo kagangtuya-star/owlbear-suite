@@ -22,6 +22,7 @@ import {
 import { itemToInitiativeItem, getCombatState, genTiebreak } from "../utils/metadata";
 import { getLocalLang } from "../../../state";
 import { broadcastDiceRoll, isGlobalDarkRollEnabled } from "../../dice";
+import { readFixedRoll, consumeFixedRoll, randIntInclusive } from "../../dice/fixed-roll";
 
 export type RollType = "disadvantage" | "normal" | "advantage";
 export type EffectType = "prepare" | "ambush" | "combat";
@@ -53,6 +54,19 @@ function localRoll(type: RollType): LocalRoll {
   // disadvantage
   const winnerIdx = r1 <= r2 ? 0 : 1;
   return { rolls: [r1, r2], winnerIdx, finalValue: Math.min(r1, r2) };
+}
+
+// §9 — fixed variant of localRoll: the KEPT d20 face is `face`, the
+// partner die (adv/dis) is a real random face on the losing side of
+// the comparison, so winner semantics stay true (adv keeps the higher,
+// dis the lower; ties keep the first — face first satisfies both).
+function fixedLocalRoll(type: RollType, face: number): LocalRoll {
+  if (type === "normal") {
+    return { rolls: [face], winnerIdx: 0, finalValue: face };
+  }
+  const partner =
+    type === "advantage" ? randIntInclusive(1, face) : randIntInclusive(face, 20);
+  return { rolls: [face, partner], winnerIdx: 0, finalValue: face };
 }
 
 // §8 (2026-08-21) — turn-change notifications. Computed on the
@@ -892,7 +906,42 @@ export function useInitiative() {
   }, []);
 
   const rollInitiativeLocal = useCallback(async (itemId: string, type: RollType) => {
-    const { rolls, winnerIdx, finalValue } = localRoll(type);
+    // §9 — DM fixed initiative d20 (checklist: 单角色先攻 劣势/普通/优势).
+    // Fresh GM verification at THIS execution entry — the armed flag is
+    // client-local state, not proof of role. The fixed value targets
+    // the raw d20 face (the stored count is the raw d20; the panel adds
+    // the DEX mod at display time), so legal bounds are [1, 20].
+    let fixedFace: number | null = null;
+    const armed = readFixedRoll();
+    if (armed) {
+      try {
+        if ((await OBR.player.getRole()) === "GM") {
+          if (armed.value >= 1 && armed.value <= 20) {
+            consumeFixedRoll();
+            fixedFace = armed.value;
+            console.info("[obr-suite/initiative] fixed initiative roll applied", {
+              itemId, type, face: fixedFace,
+            });
+          } else {
+            OBR.notification
+              .show(
+                getLocalLang() === "en"
+                  ? `Fixed value ${armed.value} is outside the d20 range 1-20 — rolled for real (still armed)`
+                  : `固定值 ${armed.value} 超出 d20 范围 1-20，本次真实投掷（保持已固定）`,
+                "WARNING",
+              )
+              .catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "[obr-suite/initiative] fixed-roll role verify failed — rolling for real",
+          e,
+        );
+      }
+    }
+    const { rolls, winnerIdx, finalValue } =
+      fixedFace !== null ? fixedLocalRoll(type, fixedFace) : localRoll(type);
 
     // Read this token's stored DEX modifier AND invisibility flag so the
     // dice animation can SHOW the bonus alongside the d20 and route to

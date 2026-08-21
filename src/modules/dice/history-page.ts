@@ -305,7 +305,8 @@ function buildRepeatStripHtml(entry: HistoryEntry, layout: "flow" | "stack" = "s
     const end = r + 1 < rows.length ? rows[r + 1] : entry.dice.length;
     const rowDice = entry.dice.slice(start, end);
     const kept = rowDice.filter((d) => !d.loser);
-    const rowTotal = kept.reduce((a, d) => a + d.value, 0) + entry.modifier;
+    // §9 consistency fix: subtraction dice count negative in row totals.
+    const rowTotal = kept.reduce((a, d) => a + (d.subtract ? -d.value : d.value), 0) + entry.modifier;
     out.push(buildRepeatRowCard(entry, r, rowDice, rowTotal));
   }
   const cls = layout === "flow" ? "repeat-strip is-flow" : "repeat-strip is-stack";

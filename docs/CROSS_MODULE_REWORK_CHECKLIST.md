@@ -72,6 +72,8 @@
 
 ## 第二批：权限、回合与投骰交互
 
+> **实施状态（2026-08-21）**：三项代码完成，`tsc + vite build` 通过，dev `1.0.142-dev` 已部署。§7 单一权限函数 `applySearchVisibility`（search/index.ts），玩家侧开启前强制刷新场景 state 防闪现，布局编辑器代理框同步隐藏；§8 经 `BROADCAST_TURN_CHANGE` 广播 + OBR 原生 toast（穿透指针），推进失败回退乐观指针并改为先写指针后写回合数；§9 新增 `src/modules/dice/fixed-roll.ts`（骰面分配器随机压测 5000/5000 通过），三个消费点（骰盘/快投/单角色先攻）均在执行时重新 getRole 验证，群体豁免（collectiveId）与群体先攻（独立路径）天然排除；顺带修复动画/历史中减法骰不取负的四处既有不一致。验收步骤见 `docs/BATCH1_ACCEPTANCE_TESTS.md` 第二批章节；实测通过前下方复选框保持未勾。
+
 ### 7. 搜索栏仅 DM 可见
 
 - [ ] 增加并持久化“仅 DM 可见”设置。

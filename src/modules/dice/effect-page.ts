@@ -1207,9 +1207,15 @@ async function runRushSequence(): Promise<void> {
     if (dice[i].loser) continue;
     diePunchOnceWAA(i, Math.round(dieMs * 1.1)).catch(() => {});
     sfx.sfxNumFly();
-    await rushFly(numEls[i], dice[i].value, RUSH_ANTICIPATE_MS, dieMs);
+    // §9 consistency fix (2026-08-21): subtraction dice contribute
+    // NEGATIVE — the broadcast/history totals always negated them, but
+    // this rush previously added them, so 1d20-1d4 animated to a
+    // different number than everywhere else. Fly the signed value so
+    // the running total matches the wire total at every step.
+    const signedValue = dice[i].subtract ? -dice[i].value : dice[i].value;
+    await rushFly(numEls[i], signedValue, RUSH_ANTICIPATE_MS, dieMs);
     sfx.sfxNumLand();
-    runningTotal += dice[i].value;
+    runningTotal += signedValue;
     totalNumEl.textContent = String(runningTotal);
     shakeRunningTotal();
     // Crit/fail tint on this die if it was a d20 nat-20 / nat-1.
@@ -1610,7 +1616,8 @@ async function runRepeatRowRushes(): Promise<void> {
     for (let i = startIdx; i < endIdx; i++) {
       if (dice[i].loser) continue;
       indices.push(i);
-      final += dice[i].value;
+      // §9 consistency fix: subtraction dice count negative here too.
+      final += dice[i].subtract ? -dice[i].value : dice[i].value;
     }
     final += modifier;
     // Anchor the row total at the rightmost VISIBLE die in this row
@@ -1660,8 +1667,10 @@ async function runOneRowRush(row: {
   let dieMs = RUSH_PER_DIE_MS;
   for (const i of row.indices) {
     diePunchOnceWAA(i, Math.round(dieMs * 1.1)).catch(() => {});
-    await rushFlyToTarget(numEls[i], row.totalNum, dice[i].value, RUSH_ANTICIPATE_MS, dieMs);
-    row.runningSum += dice[i].value;
+    // §9 consistency fix: signed contribution for subtraction dice.
+    const signedValue = dice[i].subtract ? -dice[i].value : dice[i].value;
+    await rushFlyToTarget(numEls[i], row.totalNum, signedValue, RUSH_ANTICIPATE_MS, dieMs);
+    row.runningSum += signedValue;
     row.totalNum.textContent = String(row.runningSum);
     shakeRowTotal(row.totalEl);
     if (dice[i].type === "d20" && dice[i].value === 20) diceEls[i].classList.add("crit");

@@ -1,6 +1,14 @@
 import OBR, { isImage } from "@owlbear-rodeo/sdk";
 import { getLocalLang } from "../../state";
 import { DiceType, DIE_SIDES, DieResult, rollDie, sidesOf } from "./types";
+import {
+  readFixedRoll,
+  consumeFixedRoll,
+  distributeFaces,
+  faceBounds,
+  randIntInclusive,
+  type DieSpec,
+} from "./fixed-roll";
 import { readSkinsForPlayer } from "./dice-skins";
 import { assetUrl } from "../../asset-base";
 import { onViewportResize } from "../../utils/viewportAnchor";
@@ -1023,15 +1031,173 @@ function rollSimpleExpression(expr: string): { dice: DieResult[]; modifier: numb
   return { dice, modifier };
 }
 
+// §9 — fixed-total builder for the quick-roll grammar (simple NdM sums
+// + flat modifier). Mirrors the natural pipeline's structure and
+// bookkeeping exactly: negative dice terms are emitted as loser-marked
+// dice whose faces fold into the modifier; advMode pairs every kept
+// d20 with a real losing partner; critMode appends a kept twin per
+// non-loser die. Faces are REAL (assigned within each die's range) so
+// animation / history / broadcast / total agree by construction.
+function buildFixedSimple(
+  expression: string,
+  advMode: "adv" | "dis" | undefined,
+  critMode: boolean | undefined,
+  target: number,
+):
+  | { dice: DieResult[]; modifier: number }
+  | { err: "bounds"; min: number; max: number }
+  | { err: "unsupported" } {
+  interface Term { sign: 1 | -1; count: number; sides: number }
+  const terms: Term[] = [];
+  let flatMod = 0;
+  const cleaned = expression.replace(/\s+/g, "");
+  const re = /([+\-]?)(?:(\d*)d(\d+)|(\d+))/gi;
+  for (const m of cleaned.matchAll(re)) {
+    const sign = m[1] === "-" ? -1 : 1;
+    if (m[3] !== undefined) {
+      const count = m[2] ? parseInt(m[2], 10) : 1;
+      const sides = parseInt(m[3], 10);
+      if (!sides || sides < 2 || sides > 1000) continue;
+      terms.push({ sign, count, sides });
+    } else if (m[4]) {
+      flatMod += sign * parseInt(m[4], 10);
+    }
+  }
+  if (!terms.some((t) => t.count > 0)) return { err: "unsupported" };
+  // A negative d20 under advMode would pair a discarded die — the
+  // natural path's behaviour there is degenerate; refuse cleanly.
+  if (advMode && terms.some((t) => t.sign < 0 && t.sides === 20)) {
+    return { err: "unsupported" };
+  }
+
+  // Kept-face specs, in natural emit order. Slots remember where each
+  // assigned face must land.
+  const specs: DieSpec[] = [];
+  type Slot =
+    | { kind: "plain"; term: Term }
+    | { kind: "advKept"; term: Term }
+    | { kind: "critTwin"; term: Term };
+  const slots: Slot[] = [];
+  for (const t of terms) {
+    for (let i = 0; i < t.count; i++) {
+      if (t.sign < 0) {
+        // Subtracts via the modifier (natural bookkeeping); no crit twin
+        // (the natural crit loop skips loser-marked dice).
+        specs.push({ sides: t.sides, lo: 1, hi: t.sides, subtract: true });
+        slots.push({ kind: "plain", term: t });
+        continue;
+      }
+      const isAdvD20 = !!advMode && t.sides === 20;
+      specs.push({ sides: t.sides, lo: 1, hi: t.sides });
+      slots.push({ kind: isAdvD20 ? "advKept" : "plain", term: t });
+      if (critMode) {
+        specs.push({ sides: t.sides, lo: 1, hi: t.sides });
+        slots.push({ kind: "critTwin", term: t });
+      }
+    }
+  }
+
+  const need = target - flatMod;
+  const faces = distributeFaces(specs, need);
+  if (!faces) {
+    const { low, high } = faceBounds(specs);
+    return { err: "bounds", min: low + flatMod, max: high + flatMod };
+  }
+
+  const dice: DieResult[] = [];
+  let modifier = flatMod;
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    const face = faces[i];
+    const type = `d${slot.term.sides}`;
+    if (slot.kind === "plain" && slot.term.sign < 0) {
+      // face came back positive; contribution already negative via spec
+      dice.push({ type, value: face, loser: true });
+      modifier -= face;
+      continue;
+    }
+    dice.push({ type, value: face });
+    if (slot.kind === "advKept") {
+      // Real losing partner: adv keeps the higher (ties keep the first,
+      // so partner <= face), dis keeps the lower (partner >= face).
+      const partner =
+        advMode === "adv" ? randIntInclusive(1, face) : randIntInclusive(face, 20);
+      dice.push({ type: "d20", value: partner, loser: true });
+    }
+  }
+  return { dice, modifier };
+}
+
 async function handleQuickRoll(req: QuickRollRequest): Promise<void> {
-  const parsed = rollSimpleExpression(req.expression);
+  // §9 — DM fixed result. Single-value rolls only: group saves (and
+  // any other batch flow) always carry a collectiveId and are excluded
+  // by contract. Fresh GM verification at THIS execution entry. When
+  // the fix applies we take the pre-assigned faces and skip the random
+  // pipeline; everything downstream (focus, broadcast, animation,
+  // history) is shared, so consistency is structural.
+  let fixedBuilt: { dice: DieResult[]; modifier: number } | null = null;
+  if (!req.collectiveId) {
+    const armed = readFixedRoll();
+    if (armed) {
+      let role = "PLAYER";
+      try {
+        role = await OBR.player.getRole();
+      } catch (e) {
+        console.warn("[obr-suite/dice] fixed-roll role verify failed — rolling for real", e);
+      }
+      if (role === "GM") {
+        const en = getLocalLang() === "en";
+        const built = buildFixedSimple(req.expression, req.advMode, req.critMode, armed.value);
+        if ("dice" in built) {
+          consumeFixedRoll();
+          fixedBuilt = built;
+          console.info("[obr-suite/dice] fixed roll applied", {
+            entry: "quick-roll",
+            expression: req.expression,
+            advMode: req.advMode ?? null,
+            critMode: !!req.critMode,
+            target: armed.value,
+          });
+        } else {
+          if (built.err === "bounds") {
+            OBR.notification
+              .show(
+                en
+                  ? `Fixed value ${armed.value} is outside this formula's range [${built.min}, ${built.max}] — rolled for real (still armed)`
+                  : `固定值 ${armed.value} 超出该公式范围 [${built.min}, ${built.max}]，本次真实投掷（保持已固定）`,
+                "WARNING",
+              )
+              .catch(() => {});
+          } else {
+            OBR.notification
+              .show(
+                en
+                  ? "This formula doesn't support fixed results — rolled for real (still armed)"
+                  : "该公式不支持固定结果，本次真实投掷（保持已固定）",
+                "WARNING",
+              )
+              .catch(() => {});
+          }
+          console.warn("[obr-suite/dice] fixed roll not applied", {
+            entry: "quick-roll",
+            expression: req.expression,
+            target: armed.value,
+            reason: built.err,
+          });
+        }
+      }
+    }
+  }
+
+  const parsed = fixedBuilt ?? rollSimpleExpression(req.expression);
   let { dice } = parsed;
   const { modifier } = parsed;
 
   // Advantage / disadvantage shortcut: every d20 in the dice array
   // gets a paired roll; keep the higher (adv) / lower (dis), mark the
-  // loser. Other dice are unaffected.
-  if (req.advMode === "adv" || req.advMode === "dis") {
+  // loser. Other dice are unaffected. (Skipped for a fixed build —
+  // buildFixedSimple already emitted the partners.)
+  if (!fixedBuilt && (req.advMode === "adv" || req.advMode === "dis")) {
     const expanded: DieResult[] = [];
     for (const d of dice) {
       if (d.type !== "d20") {
@@ -1058,7 +1224,8 @@ async function handleQuickRoll(req: QuickRollRequest): Promise<void> {
   // same flag on the twin so they continue to deduct from total.
   // Loser dice (adv/dis) aren't doubled — only the kept d20 stays as-
   // is; doubling a discarded roll has no effect on the result anyway.
-  if (req.critMode) {
+  // (Skipped for a fixed build — twins are already in the dice array.)
+  if (!fixedBuilt && req.critMode) {
     const doubled: DieResult[] = [];
     for (const d of dice) {
       doubled.push(d);
@@ -1171,7 +1338,9 @@ function normalizePayload(raw: unknown): DiceRollPayload | null {
   const total =
     typeof data.total === "number"
       ? data.total
-      : dice.reduce((a, d) => a + d.value, 0) + modifier;
+      // §9 consistency fix: legacy fallback now matches the modern
+      // total semantics — losers skipped, subtraction dice negative.
+      : dice.reduce((a, d) => a + (d.loser ? 0 : d.subtract ? -d.value : d.value), 0) + modifier;
   return {
     itemId: data.itemId ?? null,
     dice,
