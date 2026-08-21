@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "preact/compat";
 import OBR from "@owlbear-rodeo/sdk";
-import { InitiativeItem, CombatState } from "../types";
+import { InitiativeItem, CombatState, TurnChangePayload } from "../types";
 import {
   METADATA_KEY,
   COMBAT_STATE_KEY,
+  BROADCAST_TURN_CHANGE,
   BROADCAST_COMBAT_START,
   BROADCAST_COMBAT_END,
   BROADCAST_COMBAT_PREPARE,
@@ -52,6 +53,66 @@ function localRoll(type: RollType): LocalRoll {
   // disadvantage
   const winnerIdx = r1 <= r2 ? 0 : 1;
   return { rolls: [r1, r2], winnerIdx, finalValue: Math.min(r1, r2) };
+}
+
+// §8 (2026-08-21) — turn-change notifications. Computed on the
+// ADVANCING client (players can't see invisible items, so only the
+// writer holds the full rotation) and broadcast to every client, self
+// included (default destination = ALL). The next-player walk skips
+// invisible entries entirely — their count/position can shift neither
+// the hint's content nor its timing — and the active name is withheld
+// when the active entry is itself invisible, so the wire says no more
+// than the existing stealth-turn overlay already does. Receiver lives
+// in initiative/index.ts (background) and uses OBR.notification.
+async function notifyTurnChange(
+  rotation: InitiativeItem[],
+  activeIdx: number,
+  round: number,
+): Promise<void> {
+  const active = rotation[activeIdx];
+  if (!active) return;
+  const activeInvisible = !!active.invisible || active.visible === false;
+  let playerIds = new Set<string>();
+  try {
+    const party = await OBR.party.getPlayers();
+    playerIds = new Set(party.filter((p) => p.role === "PLAYER").map((p) => p.id));
+  } catch (e) {
+    console.warn(
+      "[obr-suite/initiative] turn-change party read failed — ready hint skipped",
+      e,
+    );
+  }
+  let nextOwnerId: string | null = null;
+  let nextName: string | null = null;
+  for (let k = 1; k < rotation.length; k++) {
+    const cand = rotation[(activeIdx + k) % rotation.length];
+    if (cand.invisible || cand.visible === false) continue;
+    if (!cand.ownerId || !playerIds.has(cand.ownerId)) continue;
+    // The first public player-owned entry decides the hint. When it
+    // belongs to the active owner they already got the your-turn
+    // prompt — send nothing.
+    if (cand.ownerId !== active.ownerId) {
+      nextOwnerId = cand.ownerId;
+      nextName = cand.name || null;
+    }
+    break;
+  }
+  const payload: TurnChangePayload = {
+    activeOwnerId: active.ownerId || null,
+    activeName: activeInvisible ? null : (active.name || null),
+    activeInvisible,
+    nextOwnerId,
+    nextName,
+    round,
+  };
+  try {
+    await OBR.broadcast.sendMessage(BROADCAST_TURN_CHANGE, payload);
+  } catch (e) {
+    console.warn("[obr-suite/initiative] turn-change broadcast failed", {
+      payload,
+      error: e,
+    });
+  }
 }
 
 // `genTiebreak` moved to utils/metadata.ts (2026-05-14 #5 sortfix) so
@@ -1137,7 +1198,11 @@ export function useInitiative() {
     await writeCombatState({ preparing: false, inCombat: true, round: 1 });
     fireBroadcast(BROADCAST_COMBAT_START, {});
     fireBroadcast(BROADCAST_OPEN_PANEL, {});
-    broadcastFocus(firstId).catch(() => {});
+    broadcastFocus(firstId).catch((e) => {
+      console.warn("[obr-suite/initiative] combat-start focus broadcast failed", { to: firstId, error: e });
+    });
+    // §8: round-1 first turn gets the same notification as any advance.
+    void notifyTurnChange(visible, 0, 1);
   }, [broadcastFocus, writeCombatState]);
 
   const cancelPreparation = useCallback(async () => {
@@ -1217,13 +1282,47 @@ export function useInitiative() {
           lastWrittenActiveIdRef.current
           ?? allItemsRef.current.find((i) => i.active)?.id
           ?? null;
-        if (nextRound !== null) {
-          await writeCombatState({ round: nextRound });
-        }
+        // §8: pointer write FIRST, round second. The old order could
+        // commit a round tick (statusTracker decrements buff rounds on
+        // it) and then fail the pointer write — a phantom turn. A moved
+        // pointer with a stale round is the lesser fault, and it's
+        // loudly logged below instead of silently swallowed.
         await setActiveItemFromIds(nextId, prev);
         lastWrittenActiveIdRef.current = nextId;
-        broadcastFocus(nextId).catch(() => {});
-      } catch {}
+        if (nextRound !== null) {
+          try {
+            await writeCombatState({ round: nextRound });
+          } catch (e) {
+            console.error(
+              "[obr-suite/initiative] round write failed after pointer moved",
+              { from: currentId, to: nextId, dir, round, wantedRound: nextRound, error: e },
+            );
+          }
+        }
+        broadcastFocus(nextId).catch((e) => {
+          console.warn("[obr-suite/initiative] focus broadcast failed", { to: nextId, error: e });
+        });
+        void notifyTurnChange(visible, nextIndex, nextRound ?? round);
+      } catch (e) {
+        // §8: the pointer write failed — roll back the optimistic
+        // pointer (unless a later queued click already re-targeted it)
+        // so the local UI can't silently drift from the scene.
+        if (optimisticActiveIdRef.current === nextId) {
+          optimisticActiveIdRef.current = currentId;
+        }
+        console.error(
+          "[obr-suite/initiative] advanceTurn write failed — optimistic pointer rolled back",
+          { from: currentId, to: nextId, dir, round, wantedRound: nextRound, error: e },
+        );
+        OBR.notification
+          .show(
+            getLocalLang() === "en"
+              ? "Turn advance failed — local pointer restored"
+              : "切换回合失败，已回退本地指针",
+            "ERROR",
+          )
+          .catch(() => {});
+      }
       finally {
         // Release after the post-write onChange has settled, so a
         // genuine "active token removed" can still auto-activate later.
@@ -1252,7 +1351,11 @@ export function useInitiative() {
     const activeId = allItemsRef.current.find((i) => i.active)?.id;
     OBR.broadcast
       .sendMessage(BROADCAST_END_TURN_REQUEST, { activeId })
-      .catch(() => {});
+      .catch((e) => {
+        // §8: a dropped end-turn request must leave evidence — the GM
+        // never sees it, so the player's console is the only trace.
+        console.warn("[obr-suite/initiative] end-turn request broadcast failed", { activeId, error: e });
+      });
   }, [advanceTurn]);
 
   const endCombat = useCallback(async () => {
