@@ -12,10 +12,14 @@
  *
  * "解除变身" pops the top snapshot and restores it. Nested transforms
  * are FORBIDDEN since 2026-08-20 (checklist §4): while the stack is
- * non-empty, both context menus hide 变身 and applyTransform refuses —
- * including racing / UI-bypassing broadcasts, blocked inside the
- * updateItems draft. Multi-entry stacks written by OLD builds are left
- * untouched and still unwind layer by layer via 解除变身.
+ * non-empty the PLAYER 变身 menu hides, and every apply path refuses —
+ * picker click, racing / UI-bypassing broadcasts, and finally inside
+ * the updateItems draft. The GM 变身 menu stays visible on purpose:
+ * the picker is the only place to edit the per-token transform POLICY,
+ * which the GM must be able to change mid-transform; GM monster picks
+ * on a transformed token hit the same refusal. Multi-entry stacks
+ * written by OLD builds are left untouched and still unwind layer by
+ * layer via 解除变身.
  *
  * Ownership model: each player transforms tokens THEY created
  * (createdUserId === own id); the GM can transform anything. The image
