@@ -3186,6 +3186,21 @@ const TABS: TabDef[] = [
         s.allowPlayerMonsters
       }"></button>
         </div>
+        <div class="row">
+          <div class="lbl">
+            ${lang === "zh" ? "搜索栏仅 DM 可见" : "DM-Only Search Bar"}
+            <div class="desc">${
+              lang === "zh"
+                ? "默认关闭。仅 DM 可设。开启后玩家端不再显示搜索栏（布局编辑器里的搜索栏代理框一并隐藏）；角色变化、切换场景、重连时都会重新检查。"
+                : "Off by default. DM-only setting. When on, players no longer see the search bar (its layout-editor proxy box hides too); re-checked on role change, scene switch and reconnect."
+            }</div>
+          </div>
+          <button class="tog ${
+            s.searchGmOnly ? "on" : ""
+          }" data-key="searchGmOnly" type="button" ${isGM ? "" : "disabled"} aria-pressed="${
+        s.searchGmOnly
+      }"></button>
+        </div>
         ${!isGM ? `<p class="role-notice">${lang === "zh" ? "玩家端只读 · 由 DM 设置" : "Read-only · Set by DM"}</p>` : ""}
         ${SEARCH_DESC[lang]}
       `;
@@ -3196,6 +3211,12 @@ const TABS: TabDef[] = [
         ?.addEventListener("click", async () => {
           if (!isGM) return;
           await setState({ allowPlayerMonsters: !getState().allowPlayerMonsters });
+        });
+      root
+        .querySelector<HTMLButtonElement>('.tog[data-key="searchGmOnly"]')
+        ?.addEventListener("click", async () => {
+          if (!isGM) return;
+          await setState({ searchGmOnly: !getState().searchGmOnly });
         });
     },
   },

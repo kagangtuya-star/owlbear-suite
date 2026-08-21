@@ -2051,7 +2051,22 @@ OBR.onReady(async () => {
   try {
     const role = await OBR.player.getRole();
     isGM = role === "GM";
-  } catch {}
+  } catch (e) {
+    console.warn("[obr-suite/search] getRole failed — treating as PLAYER", e);
+  }
+  // §7 family: keep the role live. The initial getRole above is only a
+  // snapshot — a promoted/demoted player must gain/lose monster results
+  // in the already-open bar without reopening it.
+  try {
+    OBR.player.onChange((p) => {
+      const next = p.role === "GM";
+      if (next === isGM) return;
+      isGM = next;
+      refilter();
+    });
+  } catch (e) {
+    console.warn("[obr-suite/search] player.onChange subscribe failed", e);
+  }
 
   // Drag handle — tab below/above the input row depending on the
   // popover's vertical anchor. Background passed `?v=top|bottom`.

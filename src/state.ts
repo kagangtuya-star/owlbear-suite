@@ -110,6 +110,12 @@ export interface SuiteState {
   // Some tables prefer not to leak HP info to players via the strip.
   // Default false (strip shows the bar).
   initiativeHidePercentHpBar: boolean;
+  // 2026-08-21 — Search (checklist §7) — hide the global search bar
+  // from players. When ON only GM clients open the search popover;
+  // every entry point re-evaluates on role change, scene ready/switch
+  // and reconnect, and the layout-editor proxy box hides too.
+  // Default false (bar visible to everyone, classic behaviour).
+  searchGmOnly: boolean;
   // Cross-scene sync. When ON, the suite's scene-state is mirrored
   // to ROOM metadata so every scene in the room shares the same
   // settings. The flag itself rides along with the state (it's part
@@ -226,6 +232,7 @@ export const DEFAULT_STATE: SuiteState = {
   initiativeFocusOnTurnChange: true,
   initiativeAutoSnapOnPrep: false,
   initiativeHidePercentHpBar: false,
+  searchGmOnly: false,
   crossSceneSyncSettings: false,
   crossSceneSyncCards: false,
   libraries: DEFAULT_LIBRARIES,
@@ -306,6 +313,8 @@ function merge(partial: any): SuiteState {
       partial.initiativeAutoSnapOnPrep ?? DEFAULT_STATE.initiativeAutoSnapOnPrep,
     initiativeHidePercentHpBar:
       partial.initiativeHidePercentHpBar ?? DEFAULT_STATE.initiativeHidePercentHpBar,
+    searchGmOnly:
+      partial.searchGmOnly ?? DEFAULT_STATE.searchGmOnly,
     crossSceneSyncSettings:
       partial.crossSceneSyncSettings ?? DEFAULT_STATE.crossSceneSyncSettings,
     crossSceneSyncCards:
@@ -323,6 +332,9 @@ function suiteStateEqual(a: SuiteState, b: SuiteState): boolean {
   if (a.initiativeFocusOnTurnChange !== b.initiativeFocusOnTurnChange) return false;
   if (a.initiativeAutoSnapOnPrep !== b.initiativeAutoSnapOnPrep) return false;
   if (a.initiativeHidePercentHpBar !== b.initiativeHidePercentHpBar) return false;
+  // §7: without this diff line the setState short-circuit would drop
+  // every searchGmOnly write (same trap as disabledSources below).
+  if (a.searchGmOnly !== b.searchGmOnly) return false;
   if (a.crossSceneSyncSettings !== b.crossSceneSyncSettings) return false;
   if (a.crossSceneSyncCards !== b.crossSceneSyncCards) return false;
   for (const k of Object.keys(a.enabled) as ModuleId[]) {
