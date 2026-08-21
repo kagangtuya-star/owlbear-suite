@@ -12,14 +12,12 @@
  *
  * "解除变身" pops the top snapshot and restores it. Nested transforms
  * are FORBIDDEN since 2026-08-20 (checklist §4): while the stack is
- * non-empty the PLAYER 变身 menu hides, and every apply path refuses —
- * picker click, racing / UI-bypassing broadcasts, and finally inside
- * the updateItems draft. The GM 变身 menu stays visible on purpose:
- * the picker is the only place to edit the per-token transform POLICY,
- * which the GM must be able to change mid-transform; GM monster picks
- * on a transformed token hit the same refusal. Multi-entry stacks
- * written by OLD builds are left untouched and still unwind layer by
- * layer via 解除变身.
+ * non-empty BOTH 变身 menus hide — GM included (user decision
+ * 2026-08-21: to edit the per-token POLICY the GM reverts first, then
+ * reopens the picker) — and every apply path still refuses: picker
+ * click, racing / UI-bypassing broadcasts, and finally inside the
+ * updateItems draft. Multi-entry stacks written by OLD builds are left
+ * untouched and still unwind layer by layer via 解除变身.
  *
  * Ownership model: each player transforms tokens THEY created
  * (createdUserId === own id); the GM can transform anything. The image
@@ -481,12 +479,11 @@ export async function setupTransform(): Promise<void> {
             every: [
               { key: "type", value: "IMAGE" },
               { key: "layer", value: "CHARACTER" },
-              // NO stack condition here (unlike the player menu): the
-              // picker is also the ONLY way to edit the per-token
-              // transform POLICY, and the GM must be able to revoke or
-              // tighten it while a player transform is active. Picking
-              // a monster for an already-transformed token is refused
-              // by handleSpawn + applyTransform's guards instead.
+              // Hidden while transformed for the GM too (user decision
+              // 2026-08-21): policy edits require reverting first. The
+              // handleSpawn + applyTransform guards stay as backstop
+              // against racing / UI-bypassing paths.
+              { key: ["metadata", META_STACK], value: undefined },
             ],
             max: 1,
           },
