@@ -17,7 +17,7 @@ import { polylineLength } from "../geom/polyline";
 import { type Opening, type OpeningKind } from "./types";
 
 /** Metadata key the official Owlbear extension writes doors under. */
-const UPSTREAM_DOORS_KEY = "rodeo.owlbear.dynamic-fog/doors";
+export const UPSTREAM_DOORS_KEY = "rodeo.owlbear.dynamic-fog/doors";
 
 function asKind(value: unknown): OpeningKind {
   return value === "window" ? "window" : "door";
@@ -64,8 +64,16 @@ export function readOpenings(
     }
   }
 
+  // Our own array wins outright: once a drawing has been written by this
+  // engine the upstream key is stale (and `mutate.ts` deletes it), so
+  // reading both would show every migrated door twice.
   const upstream = md[UPSTREAM_DOORS_KEY];
-  if (Array.isArray(upstream) && polylines && polylines.length > 0) {
+  if (
+    out.length === 0 &&
+    Array.isArray(upstream) &&
+    polylines &&
+    polylines.length > 0
+  ) {
     for (let i = 0; i < upstream.length; i++) {
       const raw = upstream[i] as Record<string, any> | null;
       if (!raw || typeof raw !== "object") continue;

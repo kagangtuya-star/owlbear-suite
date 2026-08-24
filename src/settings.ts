@@ -3351,6 +3351,17 @@ const TABS: TabDef[] = [
         <h3 style="margin-top:14px">${zh ? "选项" : "Options"}</h3>
         <div class="row">
           <div class="lbl">
+            ${zh ? "整张地图铺满迷雾" : "Fill The Map With Fog"}
+            <div class="desc">${
+              zh
+                ? "这是 <b>OBR 场景本身</b>的开关（等同于迷雾工具里的「填充」），不是套件设置。<b>没打开它，墙和光源都不会有任何可见效果</b> —— 玩家本来就能看到整张图，也就无所谓「被墙挡住」。如果你觉得「灯光和墙壁不识别」，先检查这里。"
+                : "This is an <b>Owlbear scene</b> setting (the fog tool's Fill option), not a suite one. <b>With it off, walls and lights have no visible effect at all</b> — players can already see the whole map, so there is nothing for a wall to block. Check this first if lighting and walls seem to be ignored."
+            }</div>
+          </div>
+          <button class="tog" data-key="fogFilled" type="button" ${isGM ? "" : "disabled"} aria-pressed="false"></button>
+        </div>
+        <div class="row">
+          <div class="lbl">
             ${zh ? "玩家可开关门窗" : "Players Can Work Doors"}
             <div class="desc">${
               zh
@@ -3383,6 +3394,52 @@ const TABS: TabDef[] = [
       `;
     },
     afterRender: (root) => {
+      // "Fill the map with fog" reads/writes the OBR SCENE, not suite
+      // state, so it can't be rendered synchronously with the rest.
+      // Hydrate it after mount and keep it live while the tab is open.
+      const fillBtn = root.querySelector<HTMLButtonElement>(
+        '.tog[data-key="fogFilled"]',
+      );
+      if (fillBtn) {
+        const paint = (filled: boolean) => {
+          fillBtn.classList.toggle("on", filled);
+          fillBtn.setAttribute("aria-pressed", String(filled));
+        };
+        OBR.scene
+          .isReady()
+          .then(async (ready) => {
+            if (!ready) {
+              fillBtn.disabled = true;
+              return;
+            }
+            paint(await OBR.scene.fog.getFilled());
+          })
+          .catch(() => {});
+        // renderContent() replaces contentEl's innerHTML on every state
+        // change, so this listener is dropped with the node it was
+        // attached for; unsubscribe when the button leaves the DOM.
+        let unsubscribe: (() => void) | null = null;
+        try {
+          unsubscribe = OBR.scene.fog.onChange((fog) => {
+            if (!fillBtn.isConnected) {
+              unsubscribe?.();
+              unsubscribe = null;
+              return;
+            }
+            paint(fog.filled);
+          });
+        } catch {}
+        fillBtn.addEventListener("click", async () => {
+          if (!isGM) return;
+          try {
+            const next = !(await OBR.scene.fog.getFilled());
+            await OBR.scene.fog.setFilled(next);
+            paint(next);
+          } catch (e) {
+            console.warn("[fullFog] toggle fog fill failed", e);
+          }
+        });
+      }
       root
         .querySelector<HTMLButtonElement>('.tog[data-key="fogPlayerDoors"]')
         ?.addEventListener("click", async () => {

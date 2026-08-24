@@ -3,11 +3,24 @@
 // Only the GM can update FOG-layer items, so every mutation goes
 // through here and players reach it via the broadcast in
 // `tools/toggleChannel.ts`.
+//
+// Any write also MIGRATES a drawing that still carries the official
+// extension's `rodeo.owlbear.dynamic-fog/doors` array: `readOpenings`
+// converts it on the way in, and the upstream key is dropped on the way
+// out so the two representations can't drift apart.
 
-import OBR from "@owlbear-rodeo/sdk";
+import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import { OPENINGS_KEY } from "../ids";
-import { readOpenings, serialiseOpenings } from "./read";
+import { isDrawing, drawingToPolylines } from "../geom/drawing";
+import { UPSTREAM_DOORS_KEY, readOpenings, serialiseOpenings } from "./read";
 import type { Opening } from "./types";
+
+function currentOpenings(item: Item): Opening[] {
+  // Upstream's shape stores ABSOLUTE arc length, so converting it needs
+  // the drawing's contours.
+  const polylines = isDrawing(item) ? drawingToPolylines(item) : undefined;
+  return readOpenings(item, polylines);
+}
 
 async function editOpenings(
   itemId: string,
@@ -17,11 +30,11 @@ async function editOpenings(
     await OBR.scene.items.updateItems([itemId], (items) => {
       const item = items[0];
       if (!item) return;
-      const current = readOpenings(item);
-      const next = edit(current);
+      const next = edit(currentOpenings(item));
       if (!next) return;
-      (item.metadata as Record<string, unknown>)[OPENINGS_KEY] =
-        serialiseOpenings(next);
+      const metadata = item.metadata as Record<string, unknown>;
+      metadata[OPENINGS_KEY] = serialiseOpenings(next);
+      if (UPSTREAM_DOORS_KEY in metadata) delete metadata[UPSTREAM_DOORS_KEY];
     });
   } catch (e) {
     console.warn("[dynfog] opening update failed", e);

@@ -26,6 +26,16 @@ export const FOG_WALL_POLYLINES_KEY = `${PLUGIN_ID}/wallPolylines`;
 // edge. See EditorPrefs.wallExpandPx for full rationale.
 export const FOG_WALL_EXPAND_KEY = `${PLUGIN_ID}/wallExpandPx`;
 
+// Same offset, pre-converted to MAP-LOCAL units at save time.
+//
+// FOG_WALL_EXPAND_KEY is in IMAGE pixels, which the wall engine can
+// only convert by looking up the map image the Path is attached to for
+// its grid dpi. That lookup is impossible for an INDEPENDENT (unbound)
+// save, which has no `attachedTo`. Writing the converted value removes
+// the dependency entirely; the image-pixel key is kept for legacy
+// scenes and as the value the editor round-trips.
+export const FOG_WALL_EXPAND_LOCAL_KEY = `${PLUGIN_ID}/wallExpandLocal`;
+
 // Modal id (for OBR.modal.open / close).
 export const MODAL_ID = `${PLUGIN_ID}/edit`;
 

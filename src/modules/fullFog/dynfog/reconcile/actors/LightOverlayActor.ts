@@ -22,14 +22,11 @@ export class LightOverlayActor extends Actor {
     this.reconciler.patcher.deleteItems(this.billboard);
   }
 
-  update(parent: Item): void {
-    this.reconciler.patcher.updateItems([
-      this.billboard,
-      (item) => {
-        item.position = parent.position;
-        item.visible = parent.visible;
-      },
-    ]);
+  update(): void {
+    // Nothing to do: POSITION / ROTATION / VISIBLE are inherited from
+    // the parent (only SCALE and COPY are disabled), so Owlbear keeps
+    // the billboard in step on its own. Patching them here would just
+    // race the engine mid-drag.
   }
 
   private parentToBillboard(parent: Item) {

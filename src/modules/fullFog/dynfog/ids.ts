@@ -36,7 +36,11 @@ export const LIGHT_OVERLAY_KEY = dynfogId("light-overlay");
 /** On a FOG-layer Drawing produced by the fullFog image tracer: tells
  *  the wall engine to honour `FOG_WALL_EXPAND_KEY`. Reused from the
  *  existing editor output — see `../types.ts`. */
-export { FOG_PATH_KEY, FOG_WALL_EXPAND_KEY } from "../types";
+export {
+  FOG_PATH_KEY,
+  FOG_WALL_EXPAND_KEY,
+  FOG_WALL_EXPAND_LOCAL_KEY,
+} from "../types";
 
 // --- tool ids ---------------------------------------------------------------
 

@@ -25,7 +25,11 @@ import {
   matrixScaleFactor,
 } from "../../geom/xform";
 import { OpeningReactor } from "../reactors/OpeningReactor";
-import { FOG_PATH_KEY, FOG_WALL_EXPAND_KEY } from "../../ids";
+import {
+  FOG_PATH_KEY,
+  FOG_WALL_EXPAND_KEY,
+  FOG_WALL_EXPAND_LOCAL_KEY,
+} from "../../ids";
 import { getSceneDpi } from "../../runtime";
 
 export class WallActor extends Actor {
@@ -145,13 +149,21 @@ export class WallActor extends Actor {
     if (!md || md[FOG_PATH_KEY] !== true) {
       return { expandLocal: 0, expandMinPx: 1 };
     }
+
+    // Preferred: the editor already converted it (saves since
+    // 2026-08-25). Works for bound and unbound saves alike.
+    const local = Number(md[FOG_WALL_EXPAND_LOCAL_KEY]);
+    if (Number.isFinite(local) && local !== 0) {
+      return { expandLocal: local, expandMinPx: 1 };
+    }
+
     const expandImgPx = Number(md[FOG_WALL_EXPAND_KEY] ?? 0);
     if (!Number.isFinite(expandImgPx) || expandImgPx === 0) {
       return { expandLocal: 0, expandMinPx: 1 };
     }
-    // The Path's commands live in MAP-LOCAL units, which are
-    // `imagePx × sceneDpi / imageGridDpi`. Recover that ratio from the
-    // map the Path is attached to.
+    // Legacy: the value is in IMAGE pixels while the Path's commands
+    // are in MAP-LOCAL units (`imagePx × sceneDpi / imageGridDpi`), so
+    // the ratio has to come from the map the Path is attached to.
     const sceneDpi = getSceneDpi();
     const map = this.reconciler.getItem(parent.attachedTo) as any;
     const imgDpi = map?.grid?.dpi || sceneDpi;

@@ -126,6 +126,11 @@ export function createOpeningMode(
   const controls: Controls = { startDot: null, endDot: null, preview: null };
   let hover: WallSnap | null = null;
   let drag: DragState | null = null;
+  // Pointer events arrive far faster than a local-scene round trip.
+  // Without these, two in-flight updates can each decide the indicator
+  // does not exist yet and add a second one that nothing owns.
+  let hoverBusy = false;
+  let dragBusy = false;
 
   async function clearControls() {
     const ids = [controls.startDot, controls.endDot, controls.preview].filter(
@@ -225,12 +230,22 @@ export function createOpeningMode(
     },
 
     async onToolMove(_, event) {
-      if (drag) return;
-      await updateHoverDot(event);
+      if (drag || hoverBusy) return;
+      hoverBusy = true;
+      try {
+        await updateHoverDot(event);
+      } finally {
+        hoverBusy = false;
+      }
     },
 
     async onToolDragStart(_, event) {
-      await updateHoverDot(event);
+      hoverBusy = true;
+      try {
+        await updateHoverDot(event);
+      } finally {
+        hoverBusy = false;
+      }
       const snap = hover;
       if (!snap) return;
 
@@ -258,7 +273,7 @@ export function createOpeningMode(
     },
 
     async onToolDragMove(_, event) {
-      if (!drag) return;
+      if (!drag || dragBusy) return;
       // Stay on the contour the drag started on — an opening can't
       // straddle two contours, same rule as upstream.
       const snap = findWallSnap(
@@ -275,6 +290,7 @@ export function createOpeningMode(
         (v): v is string => Boolean(v),
       );
       if (ids.length === 0) return;
+      dragBusy = true;
       try {
         await OBR.scene.local.updateItems(
           ids,
@@ -289,7 +305,10 @@ export function createOpeningMode(
           },
           true,
         );
-      } catch {}
+      } catch {
+      } finally {
+        dragBusy = false;
+      }
     },
 
     async onToolDragEnd() {

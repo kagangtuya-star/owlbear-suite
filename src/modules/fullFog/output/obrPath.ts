@@ -14,7 +14,13 @@
 
 import { buildPath, Command, type PathCommand } from "@owlbear-rodeo/sdk";
 import type { Vec2 } from "../types";
-import { FOG_PATH_KEY, FOG_MAP_KEY, FOG_WALL_EXPAND_KEY, PLUGIN_ID } from "../types";
+import {
+  FOG_PATH_KEY,
+  FOG_MAP_KEY,
+  FOG_WALL_EXPAND_KEY,
+  FOG_WALL_EXPAND_LOCAL_KEY,
+  PLUGIN_ID,
+} from "../types";
 import { smoothToPathCommands } from "./smooth";
 
 /** Metadata sub-key tagging the role of a fog Path item. Currently
@@ -99,6 +105,10 @@ export function buildFogPath(
      *  outline kind ever needs this; passing it on darkFog kinds is
      *  harmless because those Paths are skipped by the watcher. */
     wallExpandPx?: number;
+    /** The same offset in MAP-LOCAL units. Lets the wall engine apply
+     *  it without having to find the map image for its grid dpi —
+     *  which an unbound save has no way to reference. */
+    wallExpandLocalPx?: number;
     /** 2026-05-26 — when false (editor "independent" save mode), the
      *  Path is NOT attached to the map; it stays put if the map is
      *  moved later, and is unlocked + hit-enabled so the GM can
@@ -169,7 +179,14 @@ export function buildFogPath(
       [FOG_PATH_KEY]: true,
       [FOG_PATH_KIND_KEY]: kind,
       [FOG_MAP_KEY]: { mapId, savedAt: Date.now(), kind, bindToMap },
-      [FOG_WALL_EXPAND_KEY]: Math.max(0, Math.round(options.wallExpandPx ?? 0)),
+      // Signed: a NEGATIVE offset pushes the blocking wall into the
+      // wall material. It used to be clamped at 0 here, which silently
+      // dropped half the slider's range and made the editor preview
+      // disagree with what actually got saved.
+      [FOG_WALL_EXPAND_KEY]: Math.round(options.wallExpandPx ?? 0),
+      [FOG_WALL_EXPAND_LOCAL_KEY]: Number.isFinite(options.wallExpandLocalPx)
+        ? (options.wallExpandLocalPx as number)
+        : 0,
     });
   if (bindToMap) {
     b = b.attachedTo(mapId).disableAttachmentBehavior(["VISIBLE", "COPY"]);

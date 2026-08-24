@@ -37,7 +37,7 @@ import { magicWand, paintBucket } from "./tools/floodFill";
 import { traceContours } from "./output/contours";
 import { simplifyDP } from "./output/simplify";
 import { buildFogPath, FOG_PATH_KIND_KEY } from "./output/obrPath";
-import { buildFogWalls, imagePxToMapLocal } from "./output/obrWalls";
+import { imagePxToMapLocal } from "./output/obrWalls";
 import { safeWallOffset } from "./output/wallOffset";
 import { samplePathCommands } from "./output/samplePath";
 // 2026-08-25 — opening bookkeeping shares the dynfog engine's geometry
@@ -2132,7 +2132,17 @@ async function save(bindToMap: boolean = true): Promise<void> {
       strokeOpacity: visible ? 0.85 : 0.0,
       strokeWidth: visible ? Math.max(2, Math.round(sceneDpi / 30)) : 0,
       tension,
-      wallExpandPx: Math.max(0, Math.round(prefs.wallExpandPx ?? 0)),
+      // Signed — a negative offset pushes the blocking wall INTO the
+      // wall material. It used to be clamped at 0 here, so half the
+      // slider's range silently did nothing and the magenta wall
+      // preview disagreed with what was saved.
+      wallExpandPx: Math.round(prefs.wallExpandPx ?? 0),
+      // Pre-converted to map-local units so the wall engine never has
+      // to find the map image for its grid dpi — an independent save
+      // has no map to find.
+      wallExpandLocalPx:
+        Math.round(prefs.wallExpandPx ?? 0) *
+        (sceneDpi / (mapItem.grid?.dpi || sceneDpi)),
       bindToMap,
     };
     let batch: typeof localPolysForOutput = [];
@@ -2160,39 +2170,18 @@ async function save(bindToMap: boolean = true): Promise<void> {
   const reattachedOpenings = reattachOpenings(preservedOpenings, sharedItems, mapItem);
   const lostOpenings = preservedOpenings.length - reattachedOpenings;
 
-  // Inline local Walls — ONLY for independent (unbound) saves.
+  // 2026-08-25 — the editor no longer emits Wall items itself.
   //
-  // In BOUND mode the wall watcher in fullFog/index.ts derives Walls
-  // from the shared Path on every client, this one included, within
-  // ~50 ms. Building a second set here just to save that one frame
-  // left the GM with two overlapping wall sets for the same map, and
-  // the watcher only ever rebuilds — and therefore only ever cuts
-  // door / window gaps into — the set it owns. Net effect: on the
-  // GM's own client, opening a door changed nothing until a page
-  // reload, because the editor's untracked copy of the wall was
-  // still standing.
-  //
-  // Unbound saves get no watcher coverage at all (it skips Paths
-  // without `attachedTo`), so those still need the inline walls.
-  //
-  // Sampling done via smoothToPolyline so the lines match what the
-  // watcher's commands-sampler produces. Apply the SAME wall-expand
-  // offset the watcher applies, so both agree.
-  const wantInlineWalls = wantWall && !bindToMap;
-  let localItems: any[] = [];
-  if (wantInlineWalls) {
-    const wallExpandSavePx = Number(prefs.wallExpandPx ?? 0);
-    let wallContoursForSave = processed;
-    if (wallExpandSavePx !== 0) {
-      const expanded = safeWallOffset(processed, wallExpandSavePx, 1);
-      if (expanded.length > 0) wallContoursForSave = expanded;
-    }
-    const wallImgPolylines = wallContoursForSave.map((c) =>
-      tension > 0 ? smoothToPolyline(c, tension, true, 8) : [...c, c[0]],
-    );
-    const localWallPolys = wallImgPolylines.map((c) => imagePxToMapLocal(c, mapItem, sceneDpi));
-    localItems = buildFogWalls(localWallPolys, mapItem, { bindToMap });
-  }
+  // It used to, for INDEPENDENT (unbound) saves only, because the old
+  // wall watcher skipped Paths without `attachedTo`. The dynfog engine
+  // has no such restriction: it derives walls from every FOG-layer
+  // drawing, bound or not, and it is the only thing that cuts door /
+  // window gaps into them. Emitting a second, untracked wall set here
+  // would leave an unbound map permanently sealed — the engine would
+  // open its own copy of the wall while the editor's copy went on
+  // blocking vision.
+  const localItems: any[] = [];
+  void wantWall;
 
   // 2026-05-26 (Phase D) — append door items to sharedItems. Doors
   // are tiny FOG-layer Paths with dynamic-fog door metadata; they
@@ -2252,8 +2241,8 @@ async function save(bindToMap: boolean = true): Promise<void> {
           : ` · 门窗标记保留 ${reattachedOpenings}/${preservedOpenings.length}${lostOpenings > 0 ? `（${lostOpenings} 个因墙体位置变化过大被丢弃）` : ""}`)
       : "";
     stInfo.textContent = en
-      ? `✅ Saved [${modeTag}] ${processed.length} segments, ${totalPts} points${adaptiveNote} (${sharedItems.length} shared Path${doorSuffix} + ${localItems.length} local Wall · ${(t1 - t0).toFixed(0)}ms)${openingSuffix}`
-      : `✅ 保存了 [${modeTag}] ${processed.length} 段 ${totalPts} 个点${adaptiveNote}（${sharedItems.length} 共享 Path${doorSuffix} + ${localItems.length} 本地 Wall · ${(t1 - t0).toFixed(0)}ms）${openingSuffix}`;
+      ? `✅ Saved [${modeTag}] ${processed.length} segments, ${totalPts} points${adaptiveNote} (${sharedItems.length} shared Path${doorSuffix} · ${(t1 - t0).toFixed(0)}ms)${openingSuffix}`
+      : `✅ 保存了 [${modeTag}] ${processed.length} 段 ${totalPts} 个点${adaptiveNote}（${sharedItems.length} 共享 Path${doorSuffix} · ${(t1 - t0).toFixed(0)}ms）${openingSuffix}`;
     setTimeout(() => { void OBR.modal.close(MODAL_ID).catch(() => {}); }, 700);
   } catch (e) {
     // OBR rejects with a plain object whose `.message` is undefined.
