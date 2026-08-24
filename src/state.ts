@@ -1,5 +1,4 @@
 import OBR from "@owlbear-rodeo/sdk";
-import { STABLE_HIDES } from "./feature-flags";
 
 // Shared state across the suite. Three layers:
 //
@@ -198,10 +197,11 @@ export const DEFAULT_STATE: SuiteState = {
     // (Otsu / adaptive / color-exclude / saturation-aware / threshold)
     // + manual tools (brush / eraser / lasso / wand / bucket) → save
     // as a single low-drawcall Path item attached to the map.
-    // 2026-05-26 — promoted to stable. The setupFullFog() body still
-    // gates the light + dev-door-tool subsystems on !STABLE_HIDES so
-    // stable only sees the editor + map context menu; light + the old
-    // door/window tool modes stay dev-only.
+    // 2026-05-26 — promoted to stable. 2026-08-25 — setupFullFog()
+    // now gates only the dynfog AUTHORING surface (light menu,
+    // fog-tool line/door/window modes, indicators, player toggle
+    // tool) on !STABLE_HIDES. The wall engine itself runs in both
+    // channels: without it the editor's saved outline blocks nothing.
     fullFog: true,
     // Trickster — DM-placed circular trigger zone. When a target
     // token drag-commits into the zone, fires a one-shot time stop

@@ -596,12 +596,12 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
   // runs and no popover / audio engine / PeerJS pairing starts. The
   // web tool at obr.dnd.center/studio/music-studio/ still works
   // standalone; the settings page links there.
-  // 2026-05-26 — fullFog promoted to stable. The setupFullFog() body
-  // itself gates the light + dev-door-tool subsystems behind
-  // !STABLE_HIDES so only the "edit map fog" context menu ships to
-  // stable (matches user request: keep map-fog editor only, drop
-  // light + the old door/window tool modes). The new in-editor door
-  // tool replaces the latter.
+  // 2026-05-26 — fullFog promoted to stable. 2026-08-25 — its body
+  // gates only the dynfog AUTHORING surface (light context menu,
+  // fog-tool line/door/window modes, door indicators, player toggle
+  // tool) behind !STABLE_HIDES. Stable ships the map-fog editor plus
+  // the wall engine that turns the editor's output into vision
+  // blocking; dev additionally gets the authoring tools.
   fullFog: {
     setup: async () => { await setupFullFog(); },
     teardown: async () => { await teardownFullFog(); },
