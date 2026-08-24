@@ -159,6 +159,10 @@ function App() {
     if (item.maxHp <= 0) return null;
     const ratio = Math.max(0, Math.min(1, item.hp / item.maxHp));
     const ownsItem = !!myIdRef.current && item.ownerId === myIdRef.current;
+    // `hide` outranks ownership, exactly as in bubbles' computeViewMode:
+    // the DM marked these stats hidden, so no viewer but the DM sees a
+    // bar — not the owner, not during combat, not at any threshold.
+    if (item.bubblesHide && !isGM) return null;
     // GM and the token's owner always see the actual ratio. Other
     // viewers follow the bubbles rules: locked + idle → hidden;
     // locked + combat → quantise to threshold steps; unlocked → full.

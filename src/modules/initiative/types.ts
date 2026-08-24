@@ -32,6 +32,10 @@ export interface InitiativeItem {
   hp: number;
   maxHp: number;
   bubblesLocked: boolean;
+  /** The bubbles `hide` flag (DM marked this token's stats hidden).
+   *  The on-token bar shows nothing at all to players for these, so
+   *  the strip must not leak a percentage bar either. */
+  bubblesHide: boolean;
 }
 
 export interface CombatState {

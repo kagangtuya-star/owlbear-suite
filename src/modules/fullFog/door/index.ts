@@ -18,7 +18,10 @@
 // Visual overlays (red/green/blue lines + a clickable centre Shape)
 // live in scene.local — they're built by a lightweight reactor
 // here, not by any kind of native OBR fog primitive, so the colour
-// rules are 100% under our control.
+// rules are 100% under our control. Unlike the official plugin
+// (whose overlay only exists while the GM has the fog tool active)
+// the reactor runs on EVERY client, so players see the doors too —
+// on a layer the fog can cover, see `overlayLayer`.
 
 import OBR, {
   buildBillboard,
@@ -57,6 +60,7 @@ import {
 import {
   snapToPolylines,
   subPolyline,
+  pointAtT,
   worldToMapLocal,
   mapLocalToWorld,
   type SnapHit,
@@ -122,8 +126,27 @@ let dragState: DragState | null = null;
 let registered = false;
 const cleanups: Array<() => Promise<void> | void> = [];
 
-// path id → array of local item ids representing its current overlays.
-const overlayItemsByPath = new Map<string, string[]>();
+/** Layer the persisted opening indicators render on.
+ *
+ *  GM → CONTROL, which sits ABOVE the FOG layer: the GM must be able
+ *  to see and click every door they placed, including ones inside
+ *  areas their own fog still covers.
+ *
+ *  Player → DRAWING, which sits BELOW the FOG layer (and below the
+ *  token layers, so icons don't cover minis). Players get the same
+ *  indicators, but the dynamic fog occludes them — otherwise every
+ *  door and window in the scene would be visible through unexplored
+ *  fog and hand the party a free map of the dungeon's layout. */
+let overlayLayer: "CONTROL" | "DRAWING" = "CONTROL";
+
+interface OverlayEntry {
+  ids: string[];
+  /** Hash of everything that changes the overlay geometry / colour.
+   *  Unchanged signature ⇒ skip the rebuild. */
+  signature: string;
+}
+// path id → local overlay items + the signature they were built from.
+const overlayItemsByPath = new Map<string, OverlayEntry>();
 
 // ---------------------------------------------------------------------------
 // Outline-path helpers
@@ -253,7 +276,7 @@ function buildOverlayPath(
     .strokeOpacity(1)
     .strokeWidth(8)
     .fillOpacity(0)
-    .layer("CONTROL")
+    .layer(overlayLayer)
     .position((pathItem as any).position ?? { x: 0, y: 0 })
     .rotation((pathItem as any).rotation ?? 0)
     .scale((pathItem as any).scale ?? { x: 1, y: 1 })
@@ -290,11 +313,12 @@ function buildOverlayBillboard(
     .disableAttachmentBehavior(["SCALE", "VISIBLE", "COPY"])
     .maxViewScale(2)
     .locked(true)
-    // Explicit CONTROL layer so the icon renders ABOVE the FOG layer
-    // (where our outline Path lives) and clicks land on it during
-    // the door tool's onToolClick — billboards default-render above
-    // FOG but the explicit layer guarantees it across SDK versions.
-    .layer("CONTROL")
+    // Explicit layer — see `overlayLayer`. On the GM's client that's
+    // CONTROL, so the icon renders ABOVE the FOG layer (where our
+    // outline Path lives) and clicks land on it during the door
+    // tool's onToolClick; billboards default-render above FOG but
+    // the explicit layer guarantees it across SDK versions.
+    .layer(overlayLayer)
     .metadata(meta)
     .build();
 }
@@ -310,19 +334,27 @@ function buildOverlayBillboard(
 function buildOverlayHandle(
   pathItem: Item,
   midLocal: Vec2,
+  mapItem: any,
   meta: Record<string, any>,
 ): any {
   const mapId = (pathItem as any).attachedTo;
+  // WORLD coords, like the billboard. `attachedTo` does NOT reparent
+  // an item's transform in OBR (attachment only makes the child
+  // follow later parent moves), so a Shape's `position` is absolute.
+  // Feeding it map-local coords put the hit target a whole map-offset
+  // away from its icon on every scene where the map isn't sitting at
+  // world origin, unscaled and unrotated.
+  const worldPos = mapLocalToWorld(midLocal, mapItem);
   return buildShape()
     .shapeType("CIRCLE")
     .width(40)
     .height(40)
-    .position(midLocal)
+    .position(worldPos)
     .strokeOpacity(0)
     .strokeWidth(0)
     .fillColor("#000000")
     .fillOpacity(0)
-    .layer("CONTROL")
+    .layer(overlayLayer)
     .attachedTo(mapId)
     .disableAttachmentBehavior(["VISIBLE", "COPY"])
     .locked(true)
@@ -473,9 +505,9 @@ async function syncOverlays(): Promise<void> {
 
   const desiredIds = new Set(paths.map((p) => p.id));
   // Drop overlays for paths that have disappeared.
-  for (const [pid, ids] of [...overlayItemsByPath.entries()]) {
+  for (const [pid, entry] of [...overlayItemsByPath.entries()]) {
     if (!desiredIds.has(pid)) {
-      try { await OBR.scene.local.deleteItems(ids); } catch {}
+      try { await OBR.scene.local.deleteItems(entry.ids); } catch {}
       overlayItemsByPath.delete(pid);
     }
   }
@@ -487,26 +519,54 @@ async function syncOverlays(): Promise<void> {
     if (!mapId) continue;
     const mapItem = mapById.get(mapId);
     if (!mapItem) continue;
-    cache.set(path.id, {
-      pathItem: path,
-      mapItem,
-      polylines: samplePathCommands(cmds, 8),
-    });
 
     const md = (path.metadata as any) ?? {};
     const openings: Opening[] = Array.isArray(md[OPENINGS_KEY])
       ? md[OPENINGS_KEY]
       : [];
 
+    // Cheap hash of every input that moves or recolours an overlay:
+    // the openings themselves, the path geometry, and the transform
+    // both the path and the billboards are placed with. Without this
+    // guard the whole overlay set was torn down and rebuilt on EVERY
+    // scene change — so dragging a token made every door icon on
+    // every client blink several times a second.
+    const tf = (it: any) =>
+      `${Math.round((it.position?.x ?? 0) * 100)},${Math.round((it.position?.y ?? 0) * 100)},` +
+      `${Math.round((it.rotation ?? 0) * 100)},` +
+      `${Math.round((it.scale?.x ?? 1) * 1000)},${Math.round((it.scale?.y ?? 1) * 1000)}`;
+    const signature = JSON.stringify([
+      cmds.length,
+      tf(path),
+      tf(mapItem),
+      openings.map((o) => [
+        o.id, o.kind, !!o.open, o.polyIndex,
+        Math.round((o.t1 ?? 0) * 10000),
+        Math.round((o.t2 ?? 0) * 10000),
+      ]),
+    ]);
+    const cached = overlayItemsByPath.get(path.id);
+    if (cached && cached.signature === signature) continue;
+
+    cache.set(path.id, {
+      pathItem: path,
+      mapItem,
+      polylines: samplePathCommands(cmds, 8),
+    });
+
     // Drop existing overlay items for this path; rebuild from scratch
     // (cheap — at most a few dozen openings per path in practice).
-    const prevIds = overlayItemsByPath.get(path.id) ?? [];
-    if (prevIds.length > 0) {
-      try { await OBR.scene.local.deleteItems(prevIds); } catch {}
+    if (cached && cached.ids.length > 0) {
+      try { await OBR.scene.local.deleteItems(cached.ids); } catch {}
     }
     overlayItemsByPath.delete(path.id);
 
-    if (openings.length === 0) continue;
+    if (openings.length === 0) {
+      // Remember the empty state too, so a path with no openings
+      // doesn't re-enter this branch on every scene change.
+      overlayItemsByPath.set(path.id, { ids: [], signature });
+      continue;
+    }
     const newItems: any[] = [];
     const sample = cache.get(path.id)!;
     for (const op of openings) {
@@ -523,18 +583,25 @@ async function syncOverlays(): Promise<void> {
         [OVERLAY_PARENT_KEY]: path.id,
       };
       newItems.push(buildOverlayPath(path, sub, colour, overlayMeta));
-      const midIdx = Math.floor(sub.length / 2);
-      const midPt = sub[midIdx];
+      // Arc-length midpoint of the opening — NOT sub[len/2]. A door
+      // drawn along a straight stretch of wall yields a two-point
+      // sub-polyline, and Math.floor(2 / 2) indexes its END vertex,
+      // which parked the icon (and its click target) on one end of
+      // the door instead of the middle.
+      const midPt = pointAtT(poly, (t1 + t2) / 2) ?? sub[Math.floor(sub.length / 2)];
       newItems.push(
         buildOverlayBillboard(path, midPt, sample.mapItem, op.kind, op.open, overlayMeta),
       );
       // Backup invisible click target — see buildOverlayHandle.
-      newItems.push(buildOverlayHandle(path, midPt, overlayMeta));
+      newItems.push(buildOverlayHandle(path, midPt, sample.mapItem, overlayMeta));
     }
     if (newItems.length > 0) {
       try { await OBR.scene.local.addItems(newItems); } catch {}
-      overlayItemsByPath.set(path.id, newItems.map((i) => i.id));
     }
+    overlayItemsByPath.set(path.id, {
+      ids: newItems.map((i) => i.id),
+      signature,
+    });
   }
 }
 
@@ -576,7 +643,12 @@ async function tryToggleOrDelete(
   if (kindFilter && opening.kind !== kindFilter) return false;
 
   const altDelete = event.altKey === true;
-  const wantDelete = mode === "double" || altDelete || opening.kind === "window";
+  // Delete needs a deliberate gesture for BOTH kinds. Windows used to
+  // go on any single click (they have no open/closed state to toggle),
+  // which meant one stray click while placing the next one silently
+  // removed the window you just drew.
+  const wantDelete = mode === "double" || altDelete;
+  if (!wantDelete && opening.kind === "window") return true;
 
   await OBR.scene.items.updateItems([parentId], (drafts) => {
     for (const d of drafts) {
@@ -699,6 +771,7 @@ export async function setupFullFogDoor(): Promise<void> {
   const en = getLocalLang() === "en";
   let role: "GM" | "PLAYER" = "PLAYER";
   try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
+  overlayLayer = role === "GM" ? "CONTROL" : "DRAWING";
 
   // Tool modes — GM only. Players don't see the door / window mode
   // icons, but they STILL run the overlay watcher so they see the
@@ -856,7 +929,7 @@ export async function teardownFullFogDoor(): Promise<void> {
   }
   // Best-effort cleanup of overlay items we created.
   const allIds: string[] = [];
-  for (const ids of overlayItemsByPath.values()) allIds.push(...ids);
+  for (const entry of overlayItemsByPath.values()) allIds.push(...entry.ids);
   if (allIds.length > 0) {
     try { await OBR.scene.local.deleteItems(allIds); } catch {}
   }

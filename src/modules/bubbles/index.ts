@@ -1717,6 +1717,17 @@ async function syncBubbles(): Promise<void> {
         // parent.scale sign — flips position-offset signs in builders.
         // Need a rebuild on flip so the new bake takes effect.
         layout.flipX, layout.flipY,
+        // Token visibility. Every builder bakes `.visible(ctx.visible)`
+        // at construction time, so without this in the hash the bar
+        // kept whatever visibility the token had when it was last
+        // rebuilt: hide a token and its bar stayed on screen, show a
+        // token that was hidden when its bar was built and the bar
+        // never came back — until some unrelated edit (an HP change,
+        // a settings toggle) happened to invalidate the hash.
+        // VISIBLE attachment inheritance is deliberately left ON (it's
+        // not in DISABLE_INHERIT) and covers the hide direction at
+        // draw time, but it can't resurrect a child baked `false`.
+        it.visible ? "V" : "H",
       ].join("|");
       wanted.set(it.id, {
         tok: it,

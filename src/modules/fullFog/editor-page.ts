@@ -40,6 +40,13 @@ import { buildFogPath, FOG_PATH_KIND_KEY } from "./output/obrPath";
 import { buildFogWalls, imagePxToMapLocal } from "./output/obrWalls";
 import { safeWallOffset } from "./output/wallOffset";
 import { samplePathCommands } from "./output/samplePath";
+import { OPENINGS_KEY, SNAP_THRESHOLD, type Opening, type OpeningKind } from "./door/types";
+import {
+  pointAtT,
+  snapToPolylines,
+  mapLocalToWorld,
+  worldToMapLocal,
+} from "./door/geometry";
 import { chaikinSmooth, smoothToPolyline, smoothToPathCommands } from "./output/smooth";
 import { encodeMaskRle, decodeMaskRle } from "./output/maskRle";
 import { Command } from "@owlbear-rodeo/sdk";
@@ -147,6 +154,123 @@ const DOOR_HANDLE_HIT_PX = 10;
 const DOOR_LINE_HIT_PX = 8;
 function newDoorId(): string {
   return `door-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Canvas door / window openings (fullFog/door tool) — preservation
+// across a re-save.
+//
+// Those openings are NOT the Phase-D editor doors above. They live as
+// an `openings[]` array on the outline Path's metadata, addressed by
+// (polyIndex, t1, t2) — normalised arc-length on that Path's sampled
+// polylines. A bound save deletes every fog Path for the map and
+// writes fresh ones, so the array (and with it every door and window
+// the GM placed on the canvas) used to be lost on each re-save.
+//
+// The parameters can't be carried over verbatim — the new walls have
+// different geometry — so we snapshot each opening's two endpoints in
+// WORLD coordinates, then re-project them onto the newly built paths
+// and recompute (polyIndex, t1, t2) there. Openings whose stretch of
+// wall no longer exists (the GM repainted that room) are dropped, and
+// the save status line reports how many.
+
+/** Endpoint pair of one opening, in world coords, plus its state. */
+interface PreservedOpening {
+  kind: OpeningKind;
+  open: boolean;
+  a: Vec2;
+  b: Vec2;
+}
+
+/** Snapshot the canvas openings of every outline Path bound to this
+ *  map, before the save wipes those Paths. */
+async function snapshotOpenings(mapId: string): Promise<PreservedOpening[]> {
+  const out: PreservedOpening[] = [];
+  try {
+    const paths = await OBR.scene.items.getItems((it: Item) => {
+      if (!isPath(it)) return false;
+      if ((it as any).attachedTo !== mapId) return false;
+      const md = (it.metadata as any) ?? {};
+      if (!md[FOG_PATH_KEY]) return false;
+      const kind = md[FOG_PATH_KIND_KEY];
+      if (kind && kind !== "outline") return false;
+      return Array.isArray(md[OPENINGS_KEY]) && md[OPENINGS_KEY].length > 0;
+    });
+    for (const p of paths) {
+      const cmds = (p as any).commands;
+      if (!Array.isArray(cmds) || cmds.length === 0) continue;
+      const polys = samplePathCommands(cmds, 8);
+      const list = ((p.metadata as any)[OPENINGS_KEY] ?? []) as Opening[];
+      for (const op of list) {
+        const poly = polys[op.polyIndex];
+        if (!poly) continue;
+        const a = pointAtT(poly, Math.min(op.t1, op.t2));
+        const b = pointAtT(poly, Math.max(op.t1, op.t2));
+        if (!a || !b) continue;
+        // The Path's own transform mirrors the map's as of the save
+        // that produced it, so go through world coords — the map may
+        // have been moved or rescaled since.
+        out.push({
+          kind: op.kind,
+          open: !!op.open,
+          a: mapLocalToWorld(a, p),
+          b: mapLocalToWorld(b, p),
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[fullFog] snapshot openings failed", e);
+  }
+  return out;
+}
+
+/** Re-project preserved openings onto freshly built outline Paths,
+ *  mutating their metadata in place. Returns how many were kept. */
+function reattachOpenings(
+  preserved: PreservedOpening[],
+  newPaths: any[],
+  mapItem_: any,
+): number {
+  if (preserved.length === 0 || newPaths.length === 0) return 0;
+  const samples = newPaths.map((p) => samplePathCommands(p.commands ?? [], 8));
+  let kept = 0;
+  for (const pr of preserved) {
+    const la = worldToMapLocal(pr.a, mapItem_);
+    const lb = worldToMapLocal(pr.b, mapItem_);
+    let best: { idx: number; polyIndex: number; t1: number; t2: number; d: number } | null = null;
+    for (let i = 0; i < newPaths.length; i++) {
+      const ha = snapToPolylines(la, samples[i]);
+      const hb = snapToPolylines(lb, samples[i]);
+      // Both ends must land on the SAME polyline — an opening spanning
+      // two contours is meaningless.
+      if (!ha || !hb || ha.polyIndex !== hb.polyIndex) continue;
+      const d = Math.max(ha.distance, hb.distance);
+      if (d > SNAP_THRESHOLD) continue;
+      if (!best || d < best.d) {
+        best = {
+          idx: i,
+          polyIndex: ha.polyIndex,
+          t1: Math.min(ha.t, hb.t),
+          t2: Math.max(ha.t, hb.t),
+          d,
+        };
+      }
+    }
+    if (!best || best.t2 - best.t1 < 1e-4) continue;
+    const md = newPaths[best.idx].metadata as any;
+    const list: Opening[] = Array.isArray(md[OPENINGS_KEY]) ? md[OPENINGS_KEY] : [];
+    list.push({
+      id: `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      kind: pr.kind,
+      open: pr.open,
+      polyIndex: best.polyIndex,
+      t1: best.t1,
+      t2: best.t2,
+    });
+    md[OPENINGS_KEY] = list;
+    kept++;
+  }
+  return kept;
 }
 
 /** 2026-05-26 (Phase D) — turn an editor door into the OBR Path item
@@ -1918,7 +2042,12 @@ async function save(bindToMap: boolean = true): Promise<void> {
   // leaves prior items alone (they're user-managed standalone scene
   // items at this point — the editor shouldn't touch them on a
   // subsequent save).
+  // Canvas doors / windows live on the outline Paths we're about to
+  // delete — snapshot them first so they can be re-projected onto the
+  // new geometry below.
+  let preservedOpenings: PreservedOpening[] = [];
   if (bindToMap) {
+    preservedOpenings = await snapshotOpenings(mapItemId);
     try {
       const existingPaths = await OBR.scene.items.getItems((it: Item) => {
         return (it as any).attachedTo === mapItemId
@@ -1991,30 +2120,45 @@ async function save(bindToMap: boolean = true): Promise<void> {
     }
   }
 
-  // Walls also computed locally for IMMEDIATE feedback on the GM's
-  // client (the watcher would create them anyway on the next
-  // items.onChange tick, but doing it inline avoids a flicker frame).
-  // Sampling done via smoothToPolyline so the lines match what the
-  // watcher's commands-sampler will produce on other clients.
+  // Re-project the canvas doors / windows onto the new outline Paths.
+  // Must happen while `sharedItems` still holds ONLY outline paths —
+  // the Phase-D door items are appended further down.
+  const reattachedOpenings = reattachOpenings(preservedOpenings, sharedItems, mapItem);
+  const lostOpenings = preservedOpenings.length - reattachedOpenings;
+
+  // Inline local Walls — ONLY for independent (unbound) saves.
   //
-  // Apply the SAME wall-expand offset the watcher will apply, so
-  // the inline walls and watcher-produced walls coincide. Without
-  // this, two sets of walls (one at the visible edge, one offset)
-  // both block vision and the inner one always wins, defeating
-  // negative wall-expand values.
-  const wallExpandSavePx = Number(prefs.wallExpandPx ?? 0);
-  let wallContoursForSave = processed;
-  if (wallExpandSavePx !== 0) {
-    const expanded = safeWallOffset(processed, wallExpandSavePx, 1);
-    if (expanded.length > 0) wallContoursForSave = expanded;
+  // In BOUND mode the wall watcher in fullFog/index.ts derives Walls
+  // from the shared Path on every client, this one included, within
+  // ~50 ms. Building a second set here just to save that one frame
+  // left the GM with two overlapping wall sets for the same map, and
+  // the watcher only ever rebuilds — and therefore only ever cuts
+  // door / window gaps into — the set it owns. Net effect: on the
+  // GM's own client, opening a door changed nothing until a page
+  // reload, because the editor's untracked copy of the wall was
+  // still standing.
+  //
+  // Unbound saves get no watcher coverage at all (it skips Paths
+  // without `attachedTo`), so those still need the inline walls.
+  //
+  // Sampling done via smoothToPolyline so the lines match what the
+  // watcher's commands-sampler produces. Apply the SAME wall-expand
+  // offset the watcher applies, so both agree.
+  const wantInlineWalls = wantWall && !bindToMap;
+  let localItems: any[] = [];
+  if (wantInlineWalls) {
+    const wallExpandSavePx = Number(prefs.wallExpandPx ?? 0);
+    let wallContoursForSave = processed;
+    if (wallExpandSavePx !== 0) {
+      const expanded = safeWallOffset(processed, wallExpandSavePx, 1);
+      if (expanded.length > 0) wallContoursForSave = expanded;
+    }
+    const wallImgPolylines = wallContoursForSave.map((c) =>
+      tension > 0 ? smoothToPolyline(c, tension, true, 8) : [...c, c[0]],
+    );
+    const localWallPolys = wallImgPolylines.map((c) => imagePxToMapLocal(c, mapItem, sceneDpi));
+    localItems = buildFogWalls(localWallPolys, mapItem, { bindToMap });
   }
-  const wallImgPolylines = wallContoursForSave.map((c) =>
-    tension > 0 ? smoothToPolyline(c, tension, true, 8) : [...c, c[0]],
-  );
-  const localWallPolys = wallImgPolylines.map((c) => imagePxToMapLocal(c, mapItem, sceneDpi));
-  const localItems: any[] = wantWall
-    ? buildFogWalls(localWallPolys, mapItem, { bindToMap })
-    : [];
 
   // 2026-05-26 (Phase D) — append door items to sharedItems. Doors
   // are tiny FOG-layer Paths with dynamic-fog door metadata; they
@@ -2065,9 +2209,17 @@ async function save(bindToMap: boolean = true): Promise<void> {
     const doorSuffix = doorItemCount > 0
       ? (en ? ` + ${doorItemCount} doors` : ` + ${doorItemCount} 门`)
       : "";
+    // Canvas doors / windows carried over to the new geometry. Say so
+    // explicitly — including any that had to be dropped, so the GM
+    // knows to re-place them instead of discovering it mid-session.
+    const openingSuffix = preservedOpenings.length > 0
+      ? (en
+          ? ` · kept ${reattachedOpenings}/${preservedOpenings.length} door/window markers${lostOpenings > 0 ? ` (${lostOpenings} dropped — wall moved too far)` : ""}`
+          : ` · 门窗标记保留 ${reattachedOpenings}/${preservedOpenings.length}${lostOpenings > 0 ? `（${lostOpenings} 个因墙体位置变化过大被丢弃）` : ""}`)
+      : "";
     stInfo.textContent = en
-      ? `✅ Saved [${modeTag}] ${processed.length} segments, ${totalPts} points${adaptiveNote} (${sharedItems.length} shared Path${doorSuffix} + ${localItems.length} local Wall · ${(t1 - t0).toFixed(0)}ms)`
-      : `✅ 保存了 [${modeTag}] ${processed.length} 段 ${totalPts} 个点${adaptiveNote}（${sharedItems.length} 共享 Path${doorSuffix} + ${localItems.length} 本地 Wall · ${(t1 - t0).toFixed(0)}ms）`;
+      ? `✅ Saved [${modeTag}] ${processed.length} segments, ${totalPts} points${adaptiveNote} (${sharedItems.length} shared Path${doorSuffix} + ${localItems.length} local Wall · ${(t1 - t0).toFixed(0)}ms)${openingSuffix}`
+      : `✅ 保存了 [${modeTag}] ${processed.length} 段 ${totalPts} 个点${adaptiveNote}（${sharedItems.length} 共享 Path${doorSuffix} + ${localItems.length} 本地 Wall · ${(t1 - t0).toFixed(0)}ms）${openingSuffix}`;
     setTimeout(() => { void OBR.modal.close(MODAL_ID).catch(() => {}); }, 700);
   } catch (e) {
     // OBR rejects with a plain object whose `.message` is undefined.

@@ -82,7 +82,7 @@ export function snapToPolylines(
 
 /** Convert a normalised t to (segmentIndex, segmentT) on a polyline.
  *  Returns null on degenerate input. */
-function tToSegment(
+export function tToSegment(
   poly: Vec2[],
   t: number,
 ): { segIndex: number; segT: number } | null {
@@ -100,6 +100,73 @@ function tToSegment(
     arc += segLen;
   }
   return { segIndex: poly.length - 2, segT: 1 };
+}
+
+/** Inverse of tToSegment — the normalised arc-length t of a point
+ *  given as (segmentIndex, segmentT). Returns null on degenerate
+ *  input. */
+export function tAtSegment(
+  poly: Vec2[],
+  segIndex: number,
+  segT: number,
+): number | null {
+  if (poly.length < 2) return null;
+  if (segIndex < 0 || segIndex > poly.length - 2) return null;
+  const total = polylineLength(poly);
+  if (total < 1e-6) return null;
+  let arc = 0;
+  for (let i = 0; i < segIndex; i++) {
+    arc += Math.hypot(poly[i + 1].x - poly[i].x, poly[i + 1].y - poly[i].y);
+  }
+  const segLen = Math.hypot(
+    poly[segIndex + 1].x - poly[segIndex].x,
+    poly[segIndex + 1].y - poly[segIndex].y,
+  );
+  return Math.max(0, Math.min(1, (arc + segT * segLen) / total));
+}
+
+/** Re-express a normalised arc-length parameter measured on `from`
+ *  as the equivalent parameter on `to`.
+ *
+ *  Used by the wall watcher when 墙体外扩 (wall-expand) is non-zero:
+ *  openings are authored — and their indicator overlays drawn —
+ *  against the RAW sampled polyline, but the Wall items are derived
+ *  from the OFFSET polyline. Normalised arc-length does not survive
+ *  the offset: it changes the perimeter, so the same t slides along
+ *  the wall and the gap comes out shorter than the door drawn on it.
+ *
+ *  Both polylines have identical vertex counts and 1:1 vertex
+ *  correspondence (safeWallOffset moves every vertex, it never adds
+ *  or drops any), so segment i of `from` corresponds to segment i of
+ *  `to`. We drop a perpendicular from the point onto that segment
+ *  and its two neighbours (a door sitting near a corner can end up
+ *  closest to the next segment once the corner moves) and take the
+ *  nearest. Restricting the search to those three segments is what
+ *  keeps the projection honest — a plain nearest-point search over
+ *  the whole polyline would happily snap a door in a narrow corridor
+ *  onto the wall on the OTHER side of it.
+ *
+ *  Falls back to the input t when the two polylines don't correspond
+ *  (different vertex counts) — better a slightly misplaced gap than
+ *  no gap at all. */
+export function remapT(from: Vec2[], to: Vec2[], t: number): number {
+  if (from.length !== to.length) return t;
+  const seg = tToSegment(from, t);
+  if (!seg) return t;
+  const fallback = tAtSegment(to, seg.segIndex, seg.segT) ?? t;
+  const p = pointAtT(from, t);
+  if (!p) return fallback;
+  const lo = Math.max(0, seg.segIndex - 1);
+  const hi = Math.min(to.length - 2, seg.segIndex + 1);
+  let best: { segIndex: number; u: number; distance: number } | null = null;
+  for (let i = lo; i <= hi; i++) {
+    const c = closestOnSegment(p, to[i], to[i + 1]);
+    if (!best || c.distance < best.distance) {
+      best = { segIndex: i, u: c.u, distance: c.distance };
+    }
+  }
+  if (!best) return fallback;
+  return tAtSegment(to, best.segIndex, best.u) ?? fallback;
 }
 
 /** Interpolate a point on a polyline at normalised arc-length t. */

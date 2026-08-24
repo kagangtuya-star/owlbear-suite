@@ -25,7 +25,7 @@ import { safeWallOffset } from "./output/wallOffset";
 import { setupLight, teardownLight } from "./light";
 import { setupFullFogDoor, teardownFullFogDoor } from "./door";
 import { OPENINGS_KEY, type Opening } from "./door/types";
-import { splitPolylineByOpenings } from "./door/geometry";
+import { splitPolylineByOpenings, remapT } from "./door/geometry";
 
 const ICON_URL = assetUrl("fullfog-icon.svg");
 const EDIT_PAGE_URL = assetUrl("fullfog-edit.html");
@@ -186,9 +186,28 @@ async function syncLocalWalls(): Promise<void> {
       : [];
     let finalPolylines = wallPolylines;
     if (openings.length > 0) {
+      // Opening t-values are normalised arc-length on the RAW sampled
+      // polyline (that's what the door tool measured them against and
+      // what the indicator overlay draws). When wall-expand moved the
+      // vertices the perimeter changed, so the same t addresses a
+      // different — and, for an inward offset, proportionally
+      // shorter — stretch of wall. Remap through the segment address
+      // so the gap stays under the door the GM actually drew.
+      const offsetApplied = wallPolylines !== polylines;
       const split: typeof wallPolylines = [];
       for (let pi = 0; pi < wallPolylines.length; pi++) {
-        const ops = openings.filter((o) => o.polyIndex === pi);
+        const raw = polylines[pi];
+        const ops = openings
+          .filter((o) => o.polyIndex === pi)
+          .map((o) => (
+            offsetApplied && raw
+              ? {
+                  ...o,
+                  t1: remapT(raw, wallPolylines[pi], o.t1),
+                  t2: remapT(raw, wallPolylines[pi], o.t2),
+                }
+              : o
+          ));
         if (ops.length === 0) {
           split.push(wallPolylines[pi]);
           continue;
