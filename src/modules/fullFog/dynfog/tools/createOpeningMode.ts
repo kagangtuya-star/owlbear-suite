@@ -113,6 +113,35 @@ function lightTarget(target?: Item): string | null {
   return flag ? target.attachedTo : null;
 }
 
+// Both modes share this state. Only one tool mode can be active at a
+// time, and sharing it means either mode's onActivate clears anything
+// the other left behind — a safety net for the case where Owlbear
+// doesn't deliver onDeactivate (switching tools rather than modes).
+const controls: Controls = { startDot: null, endDot: null, preview: null };
+let hover: WallSnap | null = null;
+let drag: DragState | null = null;
+// Pointer events arrive far faster than a local-scene round trip.
+// Without these, two in-flight updates can each decide the indicator
+// does not exist yet and add a second one that nothing owns.
+let hoverBusy = false;
+let dragBusy = false;
+
+async function clearControls() {
+  const ids = [controls.startDot, controls.endDot, controls.preview].filter(
+    (v): v is string => Boolean(v),
+  );
+  controls.startDot = null;
+  controls.endDot = null;
+  controls.preview = null;
+  hover = null;
+  drag = null;
+  if (ids.length > 0) {
+    try {
+      await OBR.scene.local.deleteItems(ids);
+    } catch {}
+  }
+}
+
 export function createOpeningMode(
   reconciler: Reconciler,
   kind: OpeningKind,
@@ -122,31 +151,6 @@ export function createOpeningMode(
   const label =
     kind === "window" ? (en ? "Window" : "窗户") : en ? "Door" : "门";
   const icon = kind === "window" ? ICON_WINDOW : ICON_DOOR;
-
-  const controls: Controls = { startDot: null, endDot: null, preview: null };
-  let hover: WallSnap | null = null;
-  let drag: DragState | null = null;
-  // Pointer events arrive far faster than a local-scene round trip.
-  // Without these, two in-flight updates can each decide the indicator
-  // does not exist yet and add a second one that nothing owns.
-  let hoverBusy = false;
-  let dragBusy = false;
-
-  async function clearControls() {
-    const ids = [controls.startDot, controls.endDot, controls.preview].filter(
-      (v): v is string => Boolean(v),
-    );
-    controls.startDot = null;
-    controls.endDot = null;
-    controls.preview = null;
-    hover = null;
-    drag = null;
-    if (ids.length > 0) {
-      try {
-        await OBR.scene.local.deleteItems(ids);
-      } catch {}
-    }
-  }
 
   /** Sub-polyline between two t values on the drag target, in the
    *  parent's local space. */
@@ -331,6 +335,11 @@ export function createOpeningMode(
     },
 
     async onToolDragCancel() {
+      await clearControls();
+    },
+
+    async onActivate() {
+      // Clears anything the other mode left behind.
       await clearControls();
     },
 
