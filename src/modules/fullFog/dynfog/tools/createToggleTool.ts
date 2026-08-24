@@ -13,14 +13,12 @@
 import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import { getLocalLang } from "../../../../state";
 import { ICON_TOGGLE } from "../overlayAssets";
-import {
-  OVERLAY_OPENING_KEY,
-  TOGGLE_MODE_ID,
-  TOGGLE_TOOL_ID,
-} from "../ids";
+import { OVERLAY_OPENING_KEY, TOGGLE_MODE_ID, TOGGLE_TOOL_ID } from "../ids";
 import { isGM } from "../runtime";
-import { toggleOpening } from "../opening/mutate";
-import { requestToggle } from "./toggleChannel";
+import { setOpeningState } from "../opening/mutate";
+import { requestOpeningState } from "./toggleChannel";
+import type { Reconciler } from "../reconcile/Reconciler";
+import { OpeningReactor } from "../reconcile/reactors/OpeningReactor";
 
 let registered = false;
 
@@ -35,15 +33,23 @@ function overlayTarget(
   return { itemId: target.attachedTo, openingId };
 }
 
-export async function createToggleTool(): Promise<void> {
+export async function createToggleTool(
+  reconciler: Reconciler | null,
+): Promise<void> {
   if (registered) return;
   const en = getLocalLang() === "en";
-  const label = en ? "Doors" : "开关门窗";
+
+  /** Current state of an opening, from this client's own cache. */
+  function currentState(itemId: string, openingId: string): boolean | null {
+    const actor = reconciler?.find(OpeningReactor)?.getActor(itemId);
+    const opening = actor?.openings.find((o) => o.id === openingId);
+    return opening ? opening.open : null;
+  }
 
   try {
     await OBR.tool.create({
       id: TOGGLE_TOOL_ID,
-      icons: [{ icon: ICON_TOGGLE, label }],
+      icons: [{ icon: ICON_TOGGLE, label: en ? "Doors" : "开关门窗" }],
       defaultMode: TOGGLE_MODE_ID,
       shortcut: "K",
     });
@@ -60,10 +66,12 @@ export async function createToggleTool(): Promise<void> {
       async onToolClick(_, event) {
         const overlay = overlayTarget(event.target);
         if (!overlay) return;
+        const current = currentState(overlay.itemId, overlay.openingId);
+        if (current === null) return;
         if (isGM()) {
-          await toggleOpening(overlay.itemId, overlay.openingId);
+          await setOpeningState(overlay.itemId, overlay.openingId, !current);
         } else {
-          requestToggle(overlay.itemId, overlay.openingId);
+          requestOpeningState(overlay.itemId, overlay.openingId, !current);
         }
       },
       cursors: [

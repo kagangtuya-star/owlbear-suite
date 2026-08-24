@@ -14,11 +14,18 @@
 // Items stay `locked` so they can't be dragged out of sync with their
 // parent; tool events still hit locked items, which is how both the
 // GM's door mode and the player's toggle tool click them.
+//
+// Entries are keyed by `Opening.id` and patched in place, so toggling a
+// door recolours it rather than deleting and re-adding the billboard
+// (upstream keys by array index, which mismatches billboard and path
+// whenever a door in the middle of the array is deleted).
 
 import {
   buildBillboard,
   buildPath,
   Command,
+  isBillboard,
+  isPath,
   type Item,
   type PathCommand,
   type Vector2,
@@ -52,13 +59,23 @@ export function openingColor(opening: Opening): string {
 }
 
 interface OverlayEntry {
-  openingId: string;
   billboard: string;
   path: string;
+  layer: string;
+}
+
+/** Everything about one opening that the overlay draws. */
+interface Visual {
+  opening: Opening;
+  /** Indicator path, in the parent's local space. */
+  commands: PathCommand[];
+  /** Billboard position, in world space. */
+  centre: Vector2;
+  color: string;
 }
 
 export class OpeningOverlayActor extends Actor {
-  private entries: OverlayEntry[] = [];
+  private entries: Map<string, OverlayEntry> = new Map();
   private opening: OpeningReactor;
   private signature = "";
 
@@ -75,9 +92,9 @@ export class OpeningOverlayActor extends Actor {
   }
 
   delete(): void {
-    const ids = this.entries.flatMap((e) => [e.billboard, e.path]);
+    const ids = [...this.entries.values()].flatMap((e) => [e.billboard, e.path]);
     if (ids.length > 0) this.reconciler.patcher.deleteItems(...ids);
-    this.entries = [];
+    this.entries.clear();
     this.signature = "";
   }
 
@@ -86,14 +103,11 @@ export class OpeningOverlayActor extends Actor {
     this.rebuild(parent);
   }
 
-  /** Full rebuild guarded by a signature. Openings are few per drawing,
-   *  so replacing them wholesale is simpler — and far less error-prone —
-   *  than the index-shuffling upstream does, which mismatches billboard
-   *  and path whenever a door in the middle of the array is deleted. */
   private rebuild(parent: Drawing) {
     const actor = this.opening.getActor(parent.id);
     const openings = actor?.openings ?? [];
     const polylines = actor?.polylines ?? [];
+    const layer = isGM() ? "CONTROL" : "DRAWING";
     const signature = [
       actor?.signature ?? "",
       parent.position.x,
@@ -103,70 +117,130 @@ export class OpeningOverlayActor extends Actor {
       parent.scale.y,
       (parent as any).style?.strokeWidth ?? 0,
       parent.lastModified,
-      isGM() ? "gm" : "pl",
+      layer,
     ].join("|");
     if (signature === this.signature) return;
     this.signature = signature;
 
-    const oldIds = this.entries.flatMap((e) => [e.billboard, e.path]);
-    if (oldIds.length > 0) this.reconciler.patcher.deleteItems(...oldIds);
-    this.entries = [];
-
-    if (openings.length === 0) return;
-
     const matrix = itemMatrix(parent);
-    const layer = isGM() ? "CONTROL" : "DRAWING";
     const strokeWidth = Math.max(
       MIN_STROKE,
       (parent as any).style?.strokeWidth ?? 0,
     );
 
+    const visuals: Visual[] = [];
     for (const opening of openings) {
       const poly = polylines[opening.polyIndex];
       if (!poly) continue;
       const t1 = Math.min(opening.t1, opening.t2);
       const t2 = Math.max(opening.t1, opening.t2);
       const local = subPolyline(poly, t1, t2);
-      const centre = pointAtT(poly, (t1 + t2) / 2);
-      if (local.length < 2 || !centre) continue;
-
-      const color = openingColor(opening);
-      const path = buildPath()
-        .commands(polylineToCommands(local))
-        .fillOpacity(0)
-        .strokeColor(color)
-        .strokeOpacity(1)
-        .strokeWidth(strokeWidth)
-        .layer(layer as any)
-        .attachedTo(parent.id)
-        .position(parent.position)
-        .rotation(parent.rotation)
-        .scale(parent.scale)
-        .disableAttachmentBehavior(["VISIBLE", "COPY"])
-        .metadata({ [OVERLAY_OPENING_KEY]: opening.id })
-        .locked(true)
-        .build();
-
-      const billboard = buildBillboard(
-        openingImage(opening.kind, opening.open),
-        { dpi: 300, offset: { x: 40, y: 40 } },
-      )
-        .attachedTo(parent.id)
-        .position(transformPoint(matrix, centre))
-        .layer(layer as any)
-        .disableAttachmentBehavior(["SCALE", "VISIBLE", "COPY"])
-        .metadata({ [OVERLAY_OPENING_KEY]: opening.id })
-        .maxViewScale(2)
-        .locked(true)
-        .build();
-
-      this.entries.push({
-        openingId: opening.id,
-        billboard: billboard.id,
-        path: path.id,
+      const centreLocal = pointAtT(poly, (t1 + t2) / 2);
+      if (local.length < 2 || !centreLocal) continue;
+      visuals.push({
+        opening,
+        commands: polylineToCommands(local),
+        centre: transformPoint(matrix, centreLocal),
+        color: openingColor(opening),
       });
-      this.reconciler.patcher.addItems(path, billboard);
     }
+
+    // Drop entries whose opening is gone (or whose layer changed, which
+    // means the role flipped and the items must be recreated).
+    const wanted = new Set(visuals.map((v) => v.opening.id));
+    for (const [id, entry] of [...this.entries]) {
+      if (!wanted.has(id) || entry.layer !== layer) {
+        this.reconciler.patcher.deleteItems(entry.billboard, entry.path);
+        this.entries.delete(id);
+      }
+    }
+
+    for (const visual of visuals) {
+      const existing = this.entries.get(visual.opening.id);
+      if (existing) {
+        this.patch(parent, visual, existing, strokeWidth);
+      } else {
+        this.create(parent, visual, layer, strokeWidth);
+      }
+    }
+  }
+
+  private patch(
+    parent: Drawing,
+    visual: Visual,
+    entry: OverlayEntry,
+    strokeWidth: number,
+  ) {
+    this.reconciler.patcher.updateItems(
+      [
+        entry.path,
+        (item) => {
+          item.position = parent.position;
+          item.rotation = parent.rotation;
+          item.scale = parent.scale;
+          if (isPath(item)) {
+            item.commands = visual.commands;
+            item.style.strokeColor = visual.color;
+            item.style.strokeWidth = strokeWidth;
+          }
+        },
+      ],
+      [
+        entry.billboard,
+        (item) => {
+          item.position = visual.centre;
+          if (isBillboard(item)) {
+            item.image = openingImage(
+              visual.opening.kind,
+              visual.opening.open,
+            );
+          }
+        },
+      ],
+    );
+  }
+
+  private create(
+    parent: Drawing,
+    visual: Visual,
+    layer: string,
+    strokeWidth: number,
+  ) {
+    const path = buildPath()
+      .commands(visual.commands)
+      .fillOpacity(0)
+      .strokeColor(visual.color)
+      .strokeOpacity(1)
+      .strokeWidth(strokeWidth)
+      .layer(layer as any)
+      .attachedTo(parent.id)
+      .position(parent.position)
+      .rotation(parent.rotation)
+      .scale(parent.scale)
+      .disableAttachmentBehavior(["VISIBLE", "COPY"])
+      .metadata({ [OVERLAY_OPENING_KEY]: visual.opening.id })
+      .locked(true)
+      .build();
+
+    const billboard = buildBillboard(
+      openingImage(visual.opening.kind, visual.opening.open),
+      { dpi: 300, offset: { x: 40, y: 40 } },
+    )
+      .attachedTo(parent.id)
+      .position(visual.centre)
+      .layer(layer as any)
+      .disableAttachmentBehavior(["SCALE", "VISIBLE", "COPY"])
+      .metadata({ [OVERLAY_OPENING_KEY]: visual.opening.id })
+      .maxViewScale(2)
+      .locked(true)
+      .build();
+
+    this.entries.set(visual.opening.id, {
+      billboard: billboard.id,
+      path: path.id,
+      layer,
+    });
+    this.reconciler.patcher.addItems(path, billboard);
   }
 }
 

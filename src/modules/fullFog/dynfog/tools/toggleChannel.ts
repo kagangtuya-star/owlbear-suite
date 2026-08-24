@@ -5,17 +5,25 @@
 // GM's background applies. The GM is also the single point where the
 // "players may open doors" permission is enforced — a hand-rolled
 // message can't bypass it.
+//
+// The request carries the DESIRED state rather than "flip it", because
+// every GM client in the room receives the broadcast and a flip applied
+// twice would cancel itself out.
 
 import OBR from "@owlbear-rodeo/sdk";
 import { BC_TOGGLE_OPENING, type ToggleRequest } from "../ids";
-import { toggleOpening } from "../opening/mutate";
+import { setOpeningState } from "../opening/mutate";
 import { getPlayerOpeningsEnabled, isGM } from "../runtime";
 
 let unsubscribe: (() => void) | null = null;
 
-/** Ask the GM to flip an opening. */
-export function requestToggle(itemId: string, openingId: string): void {
-  const payload: ToggleRequest = { itemId, openingId };
+/** Ask the GM to put an opening into `open`. */
+export function requestOpeningState(
+  itemId: string,
+  openingId: string,
+  open: boolean,
+): void {
+  const payload: ToggleRequest = { itemId, openingId, open };
   try {
     OBR.broadcast.sendMessage(BC_TOGGLE_OPENING, payload as any, {
       destination: "REMOTE",
@@ -36,11 +44,12 @@ export function startToggleListener(): void {
       if (
         !data ||
         typeof data.itemId !== "string" ||
-        typeof data.openingId !== "string"
+        typeof data.openingId !== "string" ||
+        typeof data.open !== "boolean"
       ) {
         return;
       }
-      await toggleOpening(data.itemId, data.openingId);
+      await setOpeningState(data.itemId, data.openingId, data.open);
     });
   } catch (e) {
     console.warn("[dynfog] toggle listener failed", e);

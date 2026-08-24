@@ -4,16 +4,8 @@
 // of the shared scene. Every client derives them from the same shared
 // drawings, so everyone agrees without any sync traffic.
 //
-// Pipeline:
-//   1. contours from OpeningActor (drawing-local space)
-//   2. optional 墙体外扩 offset (suite fog-editor output only)
-//   3. subtract this drawing's own OPEN openings — exact, t-domain
-//   4. subtract OPEN openings owned by OTHER drawings — world-space
-//      proximity, so a door on a shared wall opens both fog shapes
-//      (this is what upstream gets for free from its Skia path ops)
-//   5. emit one Wall per resulting polyline
-//
-// Port of upstream `WallActor`.
+// The geometry itself lives in `geom/wallGeometry.ts`; this class is the
+// item plumbing around it. Port of upstream `WallActor`.
 
 import {
   buildWall,
@@ -25,12 +17,8 @@ import {
 import { Actor } from "../Actor";
 import type { Reconciler } from "../Reconciler";
 import { isDrawing, type Drawing } from "../../geom/drawing";
-import {
-  remapT,
-  splitPolylineByRanges,
-  type TRange,
-} from "../../geom/polyline";
-import { cutRangesForPolyline, type Cut } from "../../geom/cut";
+import { deriveWallPolylines } from "../../geom/wallGeometry";
+import type { Cut } from "../../geom/cut";
 import {
   inverseTransformPoint,
   itemMatrix,
@@ -38,7 +26,6 @@ import {
 } from "../../geom/xform";
 import { OpeningReactor } from "../reactors/OpeningReactor";
 import { FOG_PATH_KEY, FOG_WALL_EXPAND_KEY } from "../../ids";
-import { safeWallOffset } from "../../../output/wallOffset";
 import { getSceneDpi } from "../../runtime";
 
 export class WallActor extends Actor {
@@ -91,8 +78,8 @@ export class WallActor extends Actor {
       if (removed.length > 0) this.reconciler.patcher.deleteItems(...removed);
     }
 
-    // Walls that survive get their points (and the parent's transform,
-    // which may have moved) patched in place.
+    // Walls that survive get their points — and the parent's transform,
+    // which may have moved — patched in place.
     for (let i = 0; i < prev.length; i++) {
       const id = prev[i];
       const points = next[i];
@@ -112,10 +99,6 @@ export class WallActor extends Actor {
   /** Everything that can change the emitted walls, cheaply hashed. */
   private computeSignature(parent: Item): string {
     const actor = this.opening.getActor(parent.id);
-    const own = actor?.signature ?? "";
-    // Foreign cuts are keyed by their owner + geometry via the reactor's
-    // global signature; including it means a door toggled on ANY drawing
-    // re-evaluates this one (bbox filtering later makes that cheap).
     return [
       parent.lastModified,
       parent.position.x,
@@ -123,7 +106,10 @@ export class WallActor extends Actor {
       parent.rotation,
       parent.scale.x,
       parent.scale.y,
-      own,
+      actor?.signature ?? "",
+      // A door toggled on ANY drawing must re-evaluate this one, since
+      // openings cut across overlapping fog shapes. Bounding-box
+      // filtering inside the cut maths keeps that cheap.
       this.opening.getAllSignature(),
     ].join("|");
   }
@@ -132,46 +118,17 @@ export class WallActor extends Actor {
     const actor = this.opening.getActor(parent.id);
     const raw = actor?.polylines ?? [];
     if (raw.length === 0) return [];
-    const openings = actor?.openings ?? [];
 
-    // --- 2. 墙体外扩 (suite fog-editor only) -------------------------
-    const expanded = this.applyWallExpand(parent, raw);
-    const offsetApplied = expanded !== raw;
-
-    // --- 4. foreign cuts, brought into this drawing's local space ----
+    const { expandLocal, expandMinPx } = this.wallExpand(parent);
     const foreign = this.opening.getForeignCuts(parent.id);
-    const localCuts = foreign.length > 0 ? this.toLocalCuts(parent, foreign) : [];
 
-    const out: Vector2[][] = [];
-    for (let pi = 0; pi < expanded.length; pi++) {
-      const poly = expanded[pi];
-      if (poly.length < 2) continue;
-
-      // --- 3. own openings, exactly, in the t-domain ----------------
-      const ranges: TRange[] = [];
-      for (const o of openings) {
-        if (!o.open || o.polyIndex !== pi) continue;
-        const source = raw[pi];
-        if (offsetApplied && source) {
-          ranges.push({
-            t1: remapT(source, poly, o.t1),
-            t2: remapT(source, poly, o.t2),
-          });
-        } else {
-          ranges.push({ t1: o.t1, t2: o.t2 });
-        }
-      }
-      if (localCuts.length > 0) {
-        ranges.push(...cutRangesForPolyline(poly, localCuts));
-      }
-
-      if (ranges.length === 0) {
-        out.push(poly);
-        continue;
-      }
-      for (const piece of splitPolylineByRanges(poly, ranges)) out.push(piece);
-    }
-    return out;
+    return deriveWallPolylines({
+      polylines: raw,
+      openings: actor?.openings ?? [],
+      foreignCuts: foreign.length > 0 ? this.toLocalCuts(parent, foreign) : [],
+      expandLocal,
+      expandMinPx,
+    });
   }
 
   /**
@@ -180,12 +137,18 @@ export class WallActor extends Actor {
    * visible outline. Only that item carries the marker, so hand-drawn
    * fog is untouched.
    */
-  private applyWallExpand(parent: Drawing, polys: Vector2[][]): Vector2[][] {
+  private wallExpand(parent: Drawing): {
+    expandLocal: number;
+    expandMinPx: number;
+  } {
     const md = parent.metadata as Record<string, unknown> | undefined;
-    if (!md || md[FOG_PATH_KEY] !== true) return polys;
+    if (!md || md[FOG_PATH_KEY] !== true) {
+      return { expandLocal: 0, expandMinPx: 1 };
+    }
     const expandImgPx = Number(md[FOG_WALL_EXPAND_KEY] ?? 0);
-    if (!Number.isFinite(expandImgPx) || expandImgPx === 0) return polys;
-
+    if (!Number.isFinite(expandImgPx) || expandImgPx === 0) {
+      return { expandLocal: 0, expandMinPx: 1 };
+    }
     // The Path's commands live in MAP-LOCAL units, which are
     // `imagePx × sceneDpi / imageGridDpi`. Recover that ratio from the
     // map the Path is attached to.
@@ -193,32 +156,7 @@ export class WallActor extends Actor {
     const map = this.reconciler.getItem(parent.attachedTo) as any;
     const imgDpi = map?.grid?.dpi || sceneDpi;
     const ratio = imgDpi > 0 ? sceneDpi / imgDpi : 1;
-    const expandLocal = expandImgPx * ratio;
-
-    // `safeWallOffset` wants N distinct vertices; our closed contours
-    // repeat the first point at the end. Strip, offset, re-append.
-    const stripped = polys.map((p) => {
-      if (p.length >= 3) {
-        const first = p[0];
-        const last = p[p.length - 1];
-        if (
-          Math.abs(first.x - last.x) < 1e-6 &&
-          Math.abs(first.y - last.y) < 1e-6
-        ) {
-          return p.slice(0, -1);
-        }
-      }
-      return p;
-    });
-    const offset = safeWallOffset(stripped, expandLocal, ratio);
-    return offset.map((p, i) => {
-      // Re-close only the contours that were closed to begin with, so
-      // vertex counts stay 1:1 with `polys` for `remapT`.
-      const wasClosed = stripped[i]?.length !== polys[i]?.length;
-      return wasClosed && p.length >= 1
-        ? [...p, { x: p[0].x, y: p[0].y }]
-        : p;
-    });
+    return { expandLocal: expandImgPx * ratio, expandMinPx: ratio };
   }
 
   /** Re-express world-space cuts in the parent's local units so the

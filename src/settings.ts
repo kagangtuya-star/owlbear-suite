@@ -3278,7 +3278,7 @@ const TABS: TabDef[] = [
 </ul>
 <h4 style="margin-top:10px">输出</h4>
 <p>保存后生成<b>单个 Path item</b>（多 subpath，evenodd fillRule），attached 到地图，跟随地图缩放/位移/旋转。低 drawcall，未来可作为视野计算的几何源。</p>
-<p style="color:var(--text-dim);font-size:11.5px">⚠ Dev 通道功能，stable 不可见。</p>`,
+<p style="color:var(--text-dim);font-size:11.5px">编辑器在稳定版与测试版都可用；下面的门 / 窗 / 光源工具目前仅测试版（dev）可见。</p>`,
       en: `<h3>Map Fog Editor</h3>
 <p>Right-click a MAP-layer image → <b>Edit Map Fog</b> → fullscreen editor. Workflow is roughly Photoshop's <b>threshold/curves + selection + brush</b> applied to map images, aimed at extracting walls / obstacles as geometry data.</p>
 <h4 style="margin-top:14px">Auto algorithms</h4>
@@ -3307,7 +3307,96 @@ const TABS: TabDef[] = [
 </ul>
 <h4 style="margin-top:10px">Output</h4>
 <p>Saves as a <b>single Path item</b> (multi-subpath, evenodd fillRule), attached to the map, follows scale / translation / rotation. Low drawcall, ready for future vision-cone calculation.</p>
-<p style="color:var(--text-dim);font-size:11.5px">⚠ Dev-channel feature; not visible in stable.</p>`,
+<p style="color:var(--text-dim);font-size:11.5px">The editor ships in both channels; the door / window / light tools below are dev-channel only for now.</p>`,
+    },
+    dynamicBody: (lang) => {
+      const s = getState();
+      const zh = lang === "zh";
+      // `body` above is rendered first by renderContent(); this block is
+      // appended after it, so don't repeat it here.
+      return `
+        <h3>${zh ? "动态迷雾（墙 / 门 / 窗 / 光源）" : "Dynamic Fog (walls · doors · windows · lights)"}</h3>
+        <p>${
+          zh
+            ? "迷雾工具画出的<b>任何</b> FOG 图层图形（矩形 / 圆 / 曲线 / 直线 / Path），以及迷雾编辑器自动描出的轮廓，都会在每个客户端生成原生 <b>Wall</b>，用来遮挡视线。选中 OBR 的迷雾工具后可以看到三个新模式："
+            : "<b>Every</b> FOG-layer shape the fog tool draws (rectangle / circle / curve / line / path), plus the outline the fog editor traces, becomes native <b>Wall</b> items on each client and blocks vision. Selecting Owlbear's fog tool reveals three new modes:"
+        }</p>
+        <ul>
+          <li><b>${zh ? "直线墙" : "Line"}</b>${zh ? "：拖出一段直墙，方便在上面挂门窗。" : ": drag a straight wall segment to hang openings on."}</li>
+          <li><b>${zh ? "门（快捷键 O）" : "Door (shortcut O)"}</b>${
+            zh
+              ? "：沿墙拖动即可挖出一道门。默认<span style=\"color:#ff4d4d\">红色 = 关闭</span>（挡视线），点击切换为<span style=\"color:#85ff66\">绿色 = 打开</span>。Alt+点击或双击删除。"
+              : ": drag along a wall to carve a door. <span style=\"color:#ff4d4d\">Red = closed</span> (blocks vision); click to open (<span style=\"color:#85ff66\">green</span>). Alt-click or double-click deletes."
+          }</li>
+          <li><b>${zh ? "窗户（快捷键 I）" : "Window (shortcut I)"}</b>${
+            zh
+              ? "：同样的拖动方式，但默认<span style=\"color:#5dade2\">通透</span>（可视）。点击可"
+                + "「拉上百叶」变成挡视线的灰蓝色。"
+              : ": same gesture, but defaults to <span style=\"color:#5dade2\">see-through</span>. Click to shutter it (grey-blue, blocks vision)."
+          }</li>
+        </ul>
+        <p style="color:var(--text-dim);font-size:11.5px">${
+          zh
+            ? "注：OBR 的墙只影响<b>视线</b>，不影响<b>移动</b>，所以「能看不能走」在引擎层面无法表达 —— 窗户是「默认常开、可关闭、颜色图标与门区分」的开口。"
+            : "Note: Owlbear walls affect VISION only, never movement, so \"see through but can't walk through\" isn't expressible. A window is a normally-open, separately-styled, shutterable opening."
+        }</p>
+
+        <h4 style="margin-top:12px">${zh ? "光源" : "Lights"}</h4>
+        <p>${
+          zh
+            ? "右键任意图片或圆形 → <b>添加光源</b>，再右键 → <b>光源设置</b> 调整照明范围 / 角度（全向或锥形）/ 边缘（硬或柔）/ 类型（主光源或次光源）。锥形光源会额外获得一圈自照明，持灯人不会站在自己的暗区里。次光源只照亮已经被主光源看到的区域 —— 敌人营地的篝火设成次光源，队伍看到之前不会提前暴露。光源由原生引擎渲染，会被墙遮挡、能穿过打开的门窗。"
+            : "Right-click any image or circle → <b>Add Light</b>, then right-click → <b>Light Settings</b> for range / angle (full or cone) / edge (hard or soft) / type (primary or secondary). Cone lights get a small self light so the bearer isn't standing in their own dark spot. A secondary light only lights fog a primary light can already see. Lights are rendered by Owlbear's own engine, so walls clip them and open doors let them through."
+        }</p>
+
+        <h3 style="margin-top:14px">${zh ? "选项" : "Options"}</h3>
+        <div class="row">
+          <div class="lbl">
+            ${zh ? "玩家可开关门窗" : "Players Can Work Doors"}
+            <div class="desc">${
+              zh
+                ? "默认开启。仅 DM 可设。开启后玩家会看到门窗指示器，并在工具栏获得「开关门窗」工具，点一下就能开关；指示器画在迷雾<b>下方</b>，没探索到的区域不会提前泄露门的位置。关闭后玩家既看不到指示器也没有该工具，门窗只能由 DM 操作。"
+                : "On by default. DM-only setting. When on, players see the door/window indicators and get a 「开关门窗」 toolbar tool to flip them. Indicators render BELOW the fog, so undiscovered doors don't leak the floor plan. When off, players get neither the indicators nor the tool and only the DM can work the doors."
+            }</div>
+          </div>
+          <button class="tog ${
+            s.fogPlayerDoors ? "on" : ""
+          }" data-key="fogPlayerDoors" type="button" ${isGM ? "" : "disabled"} aria-pressed="${
+            s.fogPlayerDoors
+          }"></button>
+        </div>
+        <div class="row">
+          <div class="lbl">
+            ${zh ? "始终显示门窗指示器（DM）" : "Always Show Indicators (DM)"}
+            <div class="desc">${
+              zh
+                ? "默认关闭。开启后即使没有选中迷雾工具，DM 也能一直看到门窗指示器（上游 dynamic-fog 只在选中迷雾工具时显示）。"
+                : "Off by default. When on, the DM keeps seeing door/window indicators even without the fog tool selected (upstream dynamic-fog only shows them with the fog tool active)."
+            }</div>
+          </div>
+          <button class="tog ${
+            s.fogDoorOverlayAlways ? "on" : ""
+          }" data-key="fogDoorOverlayAlways" type="button" ${isGM ? "" : "disabled"} aria-pressed="${
+            s.fogDoorOverlayAlways
+          }"></button>
+        </div>
+        ${!isGM ? `<p class="role-notice">${zh ? "玩家端只读 · 由 DM 设置" : "Read-only · Set by DM"}</p>` : ""}
+      `;
+    },
+    afterRender: (root) => {
+      root
+        .querySelector<HTMLButtonElement>('.tog[data-key="fogPlayerDoors"]')
+        ?.addEventListener("click", async () => {
+          if (!isGM) return;
+          await setState({ fogPlayerDoors: !getState().fogPlayerDoors });
+        });
+      root
+        .querySelector<HTMLButtonElement>('.tog[data-key="fogDoorOverlayAlways"]')
+        ?.addEventListener("click", async () => {
+          if (!isGM) return;
+          await setState({
+            fogDoorOverlayAlways: !getState().fogDoorOverlayAlways,
+          });
+        });
     },
   },
   {

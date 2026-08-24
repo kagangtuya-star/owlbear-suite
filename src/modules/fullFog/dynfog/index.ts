@@ -30,6 +30,7 @@ import {
 } from "./tools/toggleChannel";
 import { createLightMenu, removeLightMenu } from "./light/createLightMenu";
 import {
+  getPlayerOpeningsEnabled,
   isGM,
   refreshRuntime,
   setAlwaysShowOverlay,
@@ -84,12 +85,12 @@ async function syncGmTools(): Promise<void> {
   }
 }
 
-async function syncToggleTool(enabled: boolean): Promise<void> {
+async function syncToggleTool(): Promise<void> {
   // The GM always keeps the tool; players only get it when allowed.
-  const want = authoring && (isGM() || enabled);
+  const want = authoring && (isGM() || getPlayerOpeningsEnabled());
   if (want === toggleToolWanted) return;
   toggleToolWanted = want;
-  if (want) await createToggleTool();
+  if (want) await createToggleTool(reconciler);
   else await removeToggleTool();
 }
 
@@ -101,7 +102,8 @@ export async function applyDynfogSettings(
   authoring = options.authoring;
   const a = setPlayerOpeningsEnabled(options.playerOpenings);
   const b = setAlwaysShowOverlay(options.alwaysShowOverlay);
-  await syncToggleTool(options.playerOpenings);
+  await syncGmTools();
+  await syncToggleTool();
   if ((a || b) && reconciler && authoring) {
     syncOverlays(reconciler);
     reconciler.refresh();
@@ -130,7 +132,7 @@ export async function setupDynfog(options: DynfogOptions): Promise<void> {
     startToggleListener();
   }
   await syncGmTools();
-  await syncToggleTool(options.playerOpenings);
+  await syncToggleTool();
 
   // Grid dpi feeds 墙体外扩; scene swaps and grid edits both move it.
   try {
@@ -150,7 +152,7 @@ export async function setupDynfog(options: DynfogOptions): Promise<void> {
           const changed = await refreshRuntime();
           if (!changed) return;
           await syncGmTools();
-          await syncToggleTool(options.playerOpenings);
+          await syncToggleTool();
           if (reconciler) {
             if (authoring) syncOverlays(reconciler);
             reconciler.refresh();

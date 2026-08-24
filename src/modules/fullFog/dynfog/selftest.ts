@@ -21,7 +21,9 @@ import {
   subPolyline,
 } from "./geom/polyline";
 import { bboxOf, cutRangesForPolyline, type Cut } from "./geom/cut";
+import { deriveWallPolylines, expandContours } from "./geom/wallGeometry";
 import { readOpenings } from "./opening/read";
+import type { Opening } from "./opening/types";
 
 export interface TestResult {
   name: string;
@@ -347,6 +349,132 @@ export function runDynfogSelfTest(): TestResult[] {
       "a distant door leaves the wall alone",
       cutRangesForPolyline(wall, [far]).length === 0,
       "",
+    );
+  }
+
+  // --- full wall derivation -------------------------------------------------
+
+  const rectPolys = drawingToPolylines(rectShape(100, 60));
+  const door = (over: Partial<Opening> = {}): Opening => ({
+    id: "d",
+    kind: "door",
+    open: false,
+    polyIndex: 0,
+    t1: 0.1,
+    t2: 0.225,
+    ...over,
+  });
+
+  {
+    const walls = deriveWallPolylines({
+      polylines: rectPolys,
+      openings: [door()],
+      foreignCuts: [],
+    });
+    const total = walls.reduce((sum, p) => sum + polylineLength(p), 0);
+    check(
+      "a CLOSED door leaves the wall whole",
+      walls.length === 1 && near(total, 320, 1e-6),
+      `pieces=${walls.length} len=${total}`,
+    );
+  }
+
+  {
+    const walls = deriveWallPolylines({
+      polylines: rectPolys,
+      openings: [door({ open: true })],
+      foreignCuts: [],
+    });
+    const total = walls.reduce((sum, p) => sum + polylineLength(p), 0);
+    check(
+      "an OPEN door punches a hole in the wall",
+      walls.length === 2 && near(total, 280, 1e-6),
+      `pieces=${walls.length} len=${total}`,
+    );
+  }
+
+  {
+    // Windows default to open, so a freshly placed one is see-through
+    // and a shuttered one blocks — the mirror image of a door.
+    const openWindow = deriveWallPolylines({
+      polylines: rectPolys,
+      openings: [door({ kind: "window", open: true })],
+      foreignCuts: [],
+    });
+    const shutWindow = deriveWallPolylines({
+      polylines: rectPolys,
+      openings: [door({ kind: "window", open: false })],
+      foreignCuts: [],
+    });
+    check(
+      "windows follow the same open ⇒ see-through rule as doors",
+      openWindow.length === 2 && shutWindow.length === 1,
+      `open=${openWindow.length} shut=${shutWindow.length}`,
+    );
+  }
+
+  {
+    // 墙体外扩: the visible outline stays put, the blocking wall moves.
+    // Vertex counts must survive so remapT can carry the door across.
+    const expanded = expandContours(rectPolys, 5, 1);
+    check(
+      "wall-expand preserves vertex counts and closure",
+      expanded.length === rectPolys.length &&
+        expanded[0].length === rectPolys[0].length &&
+        near(expanded[0][0].x, expanded[0][expanded[0].length - 1].x) &&
+        near(expanded[0][0].y, expanded[0][expanded[0].length - 1].y),
+      `${expanded[0]?.length} vs ${rectPolys[0]?.length}`,
+    );
+    const perimeter = polylineLength(expanded[0]);
+    check(
+      "wall-expand actually moves the contour",
+      Math.abs(perimeter - 320) > 1,
+      `perimeter=${perimeter.toFixed(2)}`,
+    );
+
+    const walls = deriveWallPolylines({
+      polylines: rectPolys,
+      openings: [door({ open: true })],
+      foreignCuts: [],
+      expandLocal: 5,
+      expandMinPx: 1,
+    });
+    const total = walls.reduce((sum, p) => sum + polylineLength(p), 0);
+    const gap = perimeter - total;
+    check(
+      "the door gap survives wall-expand at roughly its drawn width",
+      walls.length === 2 && Math.abs(gap - 40) < 6,
+      `pieces=${walls.length} gap=${gap.toFixed(2)}`,
+    );
+  }
+
+  {
+    // Two overlapping rooms sharing a wall along y=0: a door drawn on
+    // room A must also open room B's wall.
+    const roomB = [
+      { x: -20, y: 0 },
+      { x: 120, y: 0 },
+    ];
+    const cutPoints = [
+      { x: 40, y: 0 },
+      { x: 60, y: 0 },
+    ];
+    const cut: Cut = {
+      openingId: "shared",
+      parentId: "roomA",
+      points: cutPoints,
+      radius: 12,
+      bbox: bboxOf(cutPoints, 12),
+    };
+    const walls = deriveWallPolylines({
+      polylines: [roomB],
+      openings: [],
+      foreignCuts: [cut],
+    });
+    check(
+      "a shared-wall door opens the overlapping room too",
+      walls.length === 2,
+      `pieces=${walls.length}`,
     );
   }
 

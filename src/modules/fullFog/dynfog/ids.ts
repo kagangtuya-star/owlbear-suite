@@ -58,7 +58,7 @@ export const CTX_LIGHT_SETTINGS = dynfogId("light-menu/settings");
 
 // --- broadcast channels -----------------------------------------------------
 
-/** Player → GM: "please flip this opening". Payload `ToggleRequest`. */
+/** Player → GM: "set this opening to `open`". Payload `ToggleRequest`. */
 export const BC_TOGGLE_OPENING = dynfogId("toggle-opening");
 
 export interface ToggleRequest {
@@ -66,6 +66,13 @@ export interface ToggleRequest {
   itemId: string;
   /** `Opening.id`. */
   openingId: string;
+  /**
+   * The state the player wants, NOT "flip it". A room can have more
+   * than one GM, and every GM client receives the broadcast — a flip
+   * would be applied twice and cancel itself out. An absolute target
+   * is idempotent.
+   */
+  open: boolean;
 }
 
 // --- palette (matches upstream dynamic-fog) ---------------------------------
