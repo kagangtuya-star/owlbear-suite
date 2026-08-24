@@ -3340,6 +3340,11 @@ const TABS: TabDef[] = [
             ? "注：OBR 的墙只影响<b>视线</b>，不影响<b>移动</b>，所以「能看不能走」在引擎层面无法表达 —— 窗户是「默认常开、可关闭、颜色图标与门区分」的开口。"
             : "Note: Owlbear walls affect VISION only, never movement, so \"see through but can't walk through\" isn't expressible. A window is a normally-open, separately-styled, shutterable opening."
         }</p>
+        <p style="color:var(--text-dim);font-size:11.5px">${
+          zh
+            ? "⚠ 不要和官方的 <b>Dynamic Fog</b> 扩展同时启用：两边都会从同一批迷雾图形推导墙，结果是每面墙各生成两遍（功能上仍然正常，只是白白翻倍开销）。"
+            : "⚠ Don't run this alongside the official <b>Dynamic Fog</b> extension: both derive walls from the same fog shapes, so every wall is built twice. It still works, it just doubles the cost for nothing."
+        }</p>
 
         <h4 style="margin-top:12px">${zh ? "光源" : "Lights"}</h4>
         <p>${
