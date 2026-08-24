@@ -24,6 +24,19 @@ export interface WallDerivationInput {
   /** Minimum clearance the offset keeps from the opposite wall of a
    *  thin feature. Local units. */
   expandMinPx?: number;
+  /**
+   * Pre-computed result of `expandContours(polylines, expandLocal, …)`.
+   *
+   * The offset is O(n²) per contour (each vertex raycasts against every
+   * non-adjacent edge), so on a traced map it is by far the most
+   * expensive step here — and it only depends on the drawing's own
+   * geometry, never on any opening. Callers that re-derive walls
+   * because a door moved SOMEWHERE ELSE in the scene should cache it
+   * and pass it back in. Must be identical to what `expandContours`
+   * would return, including vertex counts (`remapT` relies on the 1:1
+   * correspondence).
+   */
+  expanded?: Vector2[][];
 }
 
 /**
@@ -76,11 +89,9 @@ export function deriveWallPolylines(
   const { polylines: raw, openings, foreignCuts } = input;
   if (raw.length === 0) return [];
 
-  const expanded = expandContours(
-    raw,
-    input.expandLocal ?? 0,
-    input.expandMinPx ?? 1,
-  );
+  const expanded =
+    input.expanded ??
+    expandContours(raw, input.expandLocal ?? 0, input.expandMinPx ?? 1);
   const offsetApplied = expanded !== raw;
 
   const out: Vector2[][] = [];

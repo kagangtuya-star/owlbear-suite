@@ -449,6 +449,29 @@ export function runDynfogSelfTest(): TestResult[] {
   }
 
   {
+    // WallActor memoises the (O(n²)) offset and hands it back in, so a
+    // door toggled elsewhere in the scene doesn't re-offset the map.
+    // The cached path must land on exactly the same walls.
+    const args = {
+      polylines: rectPolys,
+      openings: [door({ open: true })],
+      foreignCuts: [],
+      expandLocal: 5,
+      expandMinPx: 1,
+    };
+    const fresh = deriveWallPolylines(args);
+    const cached = deriveWallPolylines({
+      ...args,
+      expanded: expandContours(rectPolys, 5, 1),
+    });
+    check(
+      "pre-computed wall-expand matches computing it inline",
+      JSON.stringify(fresh) === JSON.stringify(cached),
+      `${fresh.length} vs ${cached.length} pieces`,
+    );
+  }
+
+  {
     // Two overlapping rooms sharing a wall along y=0: a door drawn on
     // room A must also open room B's wall.
     const roomB = [

@@ -17,7 +17,7 @@ import {
 import { Actor } from "../Actor";
 import type { Reconciler } from "../Reconciler";
 import { isDrawing, type Drawing } from "../../geom/drawing";
-import { deriveWallPolylines } from "../../geom/wallGeometry";
+import { deriveWallPolylines, expandContours } from "../../geom/wallGeometry";
 import type { Cut } from "../../geom/cut";
 import {
   inverseTransformPoint,
@@ -38,6 +38,8 @@ export class WallActor extends Actor {
   /** Inputs hash of the last emitted geometry — skips redundant work
    *  when an unrelated fog item changes. */
   private signature = "";
+  /** Memoised 墙体外扩 result — see `expandedContours`. */
+  private expandedCache: { key: string; polys: Vector2[][] } | null = null;
 
   constructor(reconciler: Reconciler, parent: Item) {
     super(reconciler);
@@ -60,6 +62,7 @@ export class WallActor extends Actor {
       this.reconciler.patcher.deleteItems(...this.walls);
     }
     this.walls = [];
+    this.expandedCache = null;
   }
 
   update(parent: Item): void {
@@ -132,7 +135,35 @@ export class WallActor extends Actor {
       foreignCuts: foreign.length > 0 ? this.toLocalCuts(parent, foreign) : [],
       expandLocal,
       expandMinPx,
+      expanded: this.expandedContours(parent, raw, expandLocal, expandMinPx),
     });
+  }
+
+  /**
+   * 墙体外扩, memoised.
+   *
+   * The offset raycasts every vertex against every non-adjacent edge of
+   * its contour, so it is O(n²) per contour — on a traced map it dwarfs
+   * everything else in this class. It depends only on the drawing's own
+   * geometry, while `computePolylines` re-runs whenever ANY door in the
+   * scene moves (a door on an overlapping shape can cut this wall). Not
+   * caching it would turn every door toggle anywhere into a full
+   * re-offset of every expanded map in the scene.
+   */
+  private expandedContours(
+    parent: Drawing,
+    raw: Vector2[][],
+    expandLocal: number,
+    expandMinPx: number,
+  ): Vector2[][] {
+    if (expandLocal === 0) return raw;
+    const key = `${parent.lastModified}|${expandLocal}|${expandMinPx}`;
+    if (this.expandedCache && this.expandedCache.key === key) {
+      return this.expandedCache.polys;
+    }
+    const polys = expandContours(raw, expandLocal, expandMinPx);
+    this.expandedCache = { key, polys };
+    return polys;
   }
 
   /**
