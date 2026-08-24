@@ -35,6 +35,8 @@ globalThis.document = globalThis.document || {
 globalThis.self = globalThis.self || globalThis;
 `;
 
+const entry = process.env.DYNFOG_ENTRY || "tools/dynfog-selftest.entry.ts";
+const runArgs = process.argv.slice(2);
 const out = mkdtempSync(join(tmpdir(), "dynfog-selftest-"));
 const bundle = join(out, "selftest.mjs");
 try {
@@ -42,7 +44,7 @@ try {
     process.execPath,
     [
       rolldownBin,
-      "tools/dynfog-selftest.entry.ts",
+      entry,
       "-o", bundle,
       "-f", "esm",
       "-p", "node",
@@ -50,7 +52,7 @@ try {
     ],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
-  execFileSync(process.execPath, [bundle], { stdio: "inherit" });
+  execFileSync(process.execPath, [bundle, ...runArgs], { stdio: "inherit" });
 } finally {
   rmSync(out, { recursive: true, force: true });
 }

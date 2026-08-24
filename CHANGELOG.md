@@ -17,6 +17,29 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased — dev branch]
 
+### Added
+
+- **`fullFog/dynfog` — the fog module's wall / door / light stack rebuilt as a functional port of [owlbear-rodeo/dynamic-fog](https://github.com/owlbear-rodeo/dynamic-fog).** Design notes and the deliberate deviations are in [`docs/DYNAMIC_FOG_PARITY.md`](docs/DYNAMIC_FOG_PARITY.md).
+  - **Walls now come from every FOG-layer drawing.** Shapes drawn with Owlbear's own fog tool (rectangle / circle / triangle / hexagon / freehand curve / line / path) all become native per-client `Wall` items, alongside the fog editor's traced outline. Previously only the editor's outline produced walls, so anything drawn by hand blocked nothing.
+  - **Door tool (fog toolbar, shortcut `O`).** Drag along any wall to carve a door; click to open/close, alt-click or double-click to delete. It snaps to any fog wall rather than requiring the pointer to be over the shape itself, which is what makes it work on the traced outline (that Path is `disableHit`, so it can never be a pointer target).
+  - **Window tool (shortcut `I`).** Same gesture, but a window defaults to see-through and can be shuttered — cyan when open, grey-blue when closed.
+  - **Line tool.** Drag a straight fog line, so a bare wall segment can be drawn to hang a door on.
+  - **Players can work the doors.** Indicators render for players on the `DRAWING` layer, below the fog, so undiscovered doors don't leak the floor plan; a 「开关门窗」 toolbar tool (shortcut `K`) flips one. FOG-layer items are GM-writable only, so the click is broadcast and applied by the GM, who owns the permission gate. Governed by the new `fogPlayerDoors` scene setting (default on).
+  - **Lights reach upstream parity.** Range in scene units, full/cone angle, hard/soft edge, PRIMARY/SECONDARY type, cone rotation, and the small self-light that stops a cone-carrier standing in their own dark spot. The old panel had only radius / core radius / falloff.
+  - **A door on a shared wall opens both overlapping fog shapes**, matching upstream's world-space door subtraction. Without it a door between two overlapping rooms looks open while the second shape's wall still blocks vision.
+  - **Settings → 地图迷雾** gains the two toggles above plus a passthrough for the OBR scene's own **"整张地图铺满迷雾"**. With scene fog unfilled, walls and lights have no visible effect at all — the most likely explanation for "lighting ignores walls".
+  - No new dependencies: upstream's 6.8 MB CanvasKit WASM is replaced by a pure-TS geometry core, since the background iframe loads on every client. `tools/dynfog-selftest.mjs` runs 27 geometry checks under node; `tools/dynfog-visual.mjs` renders the engine's actual wall output to [`docs/dynfog-walls.svg`](docs/dynfog-walls.svg).
+
+### Fixed
+
+- **The fog editor no longer emits its own `Wall` items on an independent (unbound) save.** The old watcher ignored Paths without `attachedTo`, so the editor built a second wall set inline; the new engine covers both bind modes, and that second, untracked set would have gone on blocking vision after the engine opened a door in its own copy — sealing an unbound map permanently.
+- **`wallExpandPx` is saved with its sign.** It was persisted through `Math.max(0, …)`, so the negative half of the slider (blocking wall pushed *into* the wall material) silently did nothing and disagreed with the editor's magenta wall preview.
+- **Wall-expand works on independent saves.** The stored value is in image pixels, which can only be converted using the map image's grid dpi — unreachable for a Path with no `attachedTo`. Saves now also record the pre-converted map-local value.
+
+### Removed
+
+- `src/modules/fullFog/door/` and `src/modules/fullFog/light/`, superseded by `dynfog/`. Openings and light metadata keep their existing keys, so scenes carry over.
+
 ### Changed
 
 - **License changed from PolyForm Noncommercial 1.0.0 → GNU GPL-3.0.** Strong copyleft. Done deliberately so the new `bubbles` module can derive from [Stat Bubbles for D&D](https://github.com/SeamusFinlayson/Bubbles-for-Owlbear-Rodeo) (also GPL-3.0) without an incompatibility. README, store listing, settings UI, and changelog all updated to reflect the new terms.
