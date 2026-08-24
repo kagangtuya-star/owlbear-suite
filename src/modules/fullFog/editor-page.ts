@@ -40,13 +40,31 @@ import { buildFogPath, FOG_PATH_KIND_KEY } from "./output/obrPath";
 import { buildFogWalls, imagePxToMapLocal } from "./output/obrWalls";
 import { safeWallOffset } from "./output/wallOffset";
 import { samplePathCommands } from "./output/samplePath";
-import { OPENINGS_KEY, SNAP_THRESHOLD, type Opening, type OpeningKind } from "./door/types";
+// 2026-08-25 — opening bookkeeping shares the dynfog engine's geometry
+// so the (polyIndex, t) space the editor writes is exactly the one the
+// wall engine reads back. That is why `commandsToPolylines` replaces the
+// local `samplePathCommands(cmds, 8)` here — see the determinism
+// contract in dynfog/geom/drawing.ts.
+import { OPENINGS_KEY, SNAP_DISTANCE } from "./dynfog/ids";
 import {
-  pointAtT,
-  snapToPolylines,
-  mapLocalToWorld,
-  worldToMapLocal,
-} from "./door/geometry";
+  newOpeningId,
+  type Opening,
+  type OpeningKind,
+} from "./dynfog/opening/types";
+import { commandsToPolylines } from "./dynfog/geom/drawing";
+import { pointAtT, snapToPolylines } from "./dynfog/geom/polyline";
+import {
+  itemMatrix,
+  transformPoint,
+  inverseTransformPoint,
+} from "./dynfog/geom/xform";
+
+/** Map-local → world for an item whose transform mirrors the map's. */
+const mapLocalToWorld = (pt: Vec2, item: any): Vec2 =>
+  transformPoint(itemMatrix(item), pt);
+/** World → map-local. Inverse of the above. */
+const worldToMapLocal = (pt: Vec2, item: any): Vec2 =>
+  inverseTransformPoint(itemMatrix(item), pt);
 import { chaikinSmooth, smoothToPolyline, smoothToPathCommands } from "./output/smooth";
 import { encodeMaskRle, decodeMaskRle } from "./output/maskRle";
 import { Command } from "@owlbear-rodeo/sdk";
@@ -199,7 +217,7 @@ async function snapshotOpenings(mapId: string): Promise<PreservedOpening[]> {
     for (const p of paths) {
       const cmds = (p as any).commands;
       if (!Array.isArray(cmds) || cmds.length === 0) continue;
-      const polys = samplePathCommands(cmds, 8);
+      const polys = commandsToPolylines(cmds);
       const list = ((p.metadata as any)[OPENINGS_KEY] ?? []) as Opening[];
       for (const op of list) {
         const poly = polys[op.polyIndex];
@@ -232,7 +250,7 @@ function reattachOpenings(
   mapItem_: any,
 ): number {
   if (preserved.length === 0 || newPaths.length === 0) return 0;
-  const samples = newPaths.map((p) => samplePathCommands(p.commands ?? [], 8));
+  const samples = newPaths.map((p) => commandsToPolylines(p.commands ?? []));
   let kept = 0;
   for (const pr of preserved) {
     const la = worldToMapLocal(pr.a, mapItem_);
@@ -245,7 +263,7 @@ function reattachOpenings(
       // two contours is meaningless.
       if (!ha || !hb || ha.polyIndex !== hb.polyIndex) continue;
       const d = Math.max(ha.distance, hb.distance);
-      if (d > SNAP_THRESHOLD) continue;
+      if (d > SNAP_DISTANCE) continue;
       if (!best || d < best.d) {
         best = {
           idx: i,
@@ -260,7 +278,7 @@ function reattachOpenings(
     const md = newPaths[best.idx].metadata as any;
     const list: Opening[] = Array.isArray(md[OPENINGS_KEY]) ? md[OPENINGS_KEY] : [];
     list.push({
-      id: `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      id: newOpeningId(),
       kind: pr.kind,
       open: pr.open,
       polyIndex: best.polyIndex,
@@ -341,11 +359,22 @@ function buildDoorItem(
         bindToMap,
         doorId: d.id,
       },
-      [DYNAMIC_FOG_DOORS_KEY]: [{
-        open: d.open,
-        start: { distance: eps, index: 0 },
-        end: { distance: length - eps, index: 0 },
-      }],
+      // 2026-08-25 — was `rodeo.owlbear.dynamic-fog/doors` (absolute
+      // arc length), written for the official extension. Now emits the
+      // suite engine's own shape: one opening covering ~100% of the
+      // segment, so an OPEN door leaves no wall and a CLOSED one leaves
+      // the whole segment. Legacy items are still read via
+      // dynfog/opening/read.ts's upstream compatibility path.
+      [OPENINGS_KEY]: [
+        {
+          id: d.id,
+          kind: "door",
+          open: d.open,
+          polyIndex: 0,
+          t1: eps / length,
+          t2: (length - eps) / length,
+        } satisfies Opening,
+      ],
     });
   if (bindToMap) {
     b = b.attachedTo(mapId).disableAttachmentBehavior(["VISIBLE", "COPY"]);
@@ -546,7 +575,12 @@ async function loadExistingFog(): Promise<void> {
       const x2ml = Number(cl[1]), y2ml = Number(cl[2]);
       if (![x1ml, y1ml, x2ml, y2ml].every((v) => Number.isFinite(v))) continue;
       const md = ((it as any).metadata as any) ?? {};
-      const doorMd = md[DYNAMIC_FOG_DOORS_KEY];
+      // Prefer the suite shape; fall back to the legacy upstream key so
+      // doors saved before 2026-08-25 still round-trip.
+      const ownMd = md[OPENINGS_KEY];
+      const doorMd = Array.isArray(ownMd) && ownMd.length > 0
+        ? ownMd
+        : md[DYNAMIC_FOG_DOORS_KEY];
       const open = Array.isArray(doorMd) && doorMd[0] ? !!doorMd[0].open : false;
       const fmm = md[FOG_MAP_KEY] ?? {};
       const id = (typeof fmm.doorId === "string" && fmm.doorId) || newDoorId();

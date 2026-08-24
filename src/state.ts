@@ -128,6 +128,17 @@ export interface SuiteState {
   // settings across scenes but keep different card decks per scene"
   // is a valid combo.
   crossSceneSyncCards: boolean;
+  // 2026-08-25 — dynamic fog (dynfog). When ON, players see the
+  // door / window indicators the GM placed and get the 「开关门窗」
+  // toolbar tool; clicking one broadcasts a request that the GM's
+  // client applies (FOG-layer items are GM-writable only). When OFF
+  // the indicators and the tool are unregistered for players entirely,
+  // so doors are GM-operated as in upstream dynamic-fog.
+  fogPlayerDoors: boolean;
+  // 2026-08-25 — keep the GM's door / window indicators on screen even
+  // when the fog tool is not the active tool. Upstream only shows them
+  // with the fog tool selected; some GMs prefer them pinned.
+  fogDoorOverlayAlways: boolean;
   libraries: LibraryConfig[];
 }
 
@@ -235,6 +246,8 @@ export const DEFAULT_STATE: SuiteState = {
   searchGmOnly: false,
   crossSceneSyncSettings: false,
   crossSceneSyncCards: false,
+  fogPlayerDoors: true,
+  fogDoorOverlayAlways: false,
   libraries: DEFAULT_LIBRARIES,
 };
 
@@ -319,6 +332,9 @@ function merge(partial: any): SuiteState {
       partial.crossSceneSyncSettings ?? DEFAULT_STATE.crossSceneSyncSettings,
     crossSceneSyncCards:
       partial.crossSceneSyncCards ?? DEFAULT_STATE.crossSceneSyncCards,
+    fogPlayerDoors: partial.fogPlayerDoors ?? DEFAULT_STATE.fogPlayerDoors,
+    fogDoorOverlayAlways:
+      partial.fogDoorOverlayAlways ?? DEFAULT_STATE.fogDoorOverlayAlways,
     libraries,
   };
 }
@@ -337,6 +353,8 @@ function suiteStateEqual(a: SuiteState, b: SuiteState): boolean {
   if (a.searchGmOnly !== b.searchGmOnly) return false;
   if (a.crossSceneSyncSettings !== b.crossSceneSyncSettings) return false;
   if (a.crossSceneSyncCards !== b.crossSceneSyncCards) return false;
+  if (a.fogPlayerDoors !== b.fogPlayerDoors) return false;
+  if (a.fogDoorOverlayAlways !== b.fogDoorOverlayAlways) return false;
   for (const k of Object.keys(a.enabled) as ModuleId[]) {
     if (a.enabled[k] !== b.enabled[k]) return false;
   }
