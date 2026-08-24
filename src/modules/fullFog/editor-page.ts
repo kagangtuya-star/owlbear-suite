@@ -175,7 +175,7 @@ function newDoorId(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Canvas door / window openings (fullFog/door tool) — preservation
+// Canvas door / window openings (the dynfog door tool) — preservation
 // across a re-save.
 //
 // Those openings are NOT the Phase-D editor doors above. They live as
