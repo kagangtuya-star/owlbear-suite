@@ -22,6 +22,13 @@ import {
 import { PORTAL_I18N } from "../../i18n-portal";
 import { getLocalLang } from "../../state";
 import { assetUrl } from "../../asset-base";
+import {
+  WallGrid,
+  landingCellSize,
+  distancePointToSegment,
+  type Point,
+  type WallSegment,
+} from "./landing";
 
 const _lang = () => getLocalLang();
 // Same shape as i18n.ts's `t`, including the `?? key` fallback — do not
@@ -1343,8 +1350,6 @@ async function moveTokensWithFogBypass(
   }
 }
 
-type Point = { x: number; y: number };
-type WallSegment = { a: Point; b: Point };
 
 function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -1412,48 +1417,6 @@ function tokenWallClearance(token: Item | undefined, dpi: number): number {
   return sourceRadius + Math.max(WALL_CLEARANCE_PADDING, dpi * 0.04);
 }
 
-function distancePointToSegment(p: Point, a: Point, b: Point): number {
-  const vx = b.x - a.x;
-  const vy = b.y - a.y;
-  const len2 = vx * vx + vy * vy;
-  if (len2 <= 0.000001) return dist(p, a);
-  const t = Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2));
-  return dist(p, { x: a.x + vx * t, y: a.y + vy * t });
-}
-
-function cross(a: Point, b: Point): number {
-  return a.x * b.y - a.y * b.x;
-}
-
-function subtract(a: Point, b: Point): Point {
-  return { x: a.x - b.x, y: a.y - b.y };
-}
-
-function segmentCrossesWall(from: Point, to: Point, wall: WallSegment): boolean {
-  if (dist(from, to) < 1) return false;
-  const r = subtract(to, from);
-  const s = subtract(wall.b, wall.a);
-  const denom = cross(r, s);
-  if (Math.abs(denom) < 0.000001) return false;
-  const qp = subtract(wall.a, from);
-  const t = cross(qp, s) / denom;
-  const u = cross(qp, r) / denom;
-  return t > 0.02 && t < 0.98 && u >= -0.001 && u <= 1.001;
-}
-
-function isSafeLandingPoint(
-  point: Point,
-  origin: Point,
-  clearance: number,
-  walls: WallSegment[],
-): boolean {
-  for (const wall of walls) {
-    if (distancePointToSegment(point, wall.a, wall.b) < clearance) return false;
-    if (segmentCrossesWall(origin, point, wall)) return false;
-  }
-  return true;
-}
-
 function buildTeleportCandidates(center: Point, spacing: number, maxRing: number): Point[] {
   const candidates: Point[] = [{ x: center.x, y: center.y }];
   for (let ring = 1; ring <= maxRing; ring++) {
@@ -1487,13 +1450,19 @@ function findSafeTeleportPositions(
     Math.max(WALL_SEARCH_EXTRA_RINGS, Math.ceil(Math.sqrt(tokenIds.length + occupants.length + 1)) + WALL_SEARCH_EXTRA_RINGS),
   );
   const candidates = buildTeleportCandidates(center, spacing, maxRing);
+  // One grid for the whole search. Both safety tests are spatially
+  // bounded, so each candidate only has to look at nearby walls rather
+  // than all of them — 58 ms -> 12 ms for four tokens against a 5.5k
+  // segment map. See landing.ts for why the answer is identical.
+  const grid = new WallGrid(walls, landingCellSize(spacing));
+  const scratch: number[] = [];
   const positions: Point[] = [];
   for (const id of tokenIds) {
     const clearance = tokenWallClearance(tokenById.get(id), dpi);
     const reserved = [...occupants, ...positions];
     const chosen = candidates.find((c) =>
       !conflictsWithReserved(c, reserved, spacing) &&
-      isSafeLandingPoint(c, center, clearance, walls)
+      grid.isSafeLandingPoint(c, center, clearance, scratch)
     );
     if (!chosen) return null;
     positions.push({ x: chosen.x, y: chosen.y });

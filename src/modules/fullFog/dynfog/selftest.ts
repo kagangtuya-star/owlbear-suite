@@ -25,6 +25,12 @@ import { bboxOf, cutRangesForPolyline, type Cut } from "./geom/cut";
 import { deriveWallPolylines, expandContours } from "./geom/wallGeometry";
 import { safeWallOffset } from "../output/wallOffset";
 import {
+  WallGrid,
+  isSafeLandingPointExhaustive,
+  landingCellSize,
+  type WallSegment as PortalWall,
+} from "../../portals/landing";
+import {
   close as morphClose,
   dilate as morphDilate,
   erode as morphErode,
@@ -1180,6 +1186,75 @@ export function runDynfogSelfTest(): TestResult[] {
       }
     }
     check("non-binary masks still take the general path", greyOk);
+  }
+
+  {
+    // Portal landing search: the grid must answer exactly what the
+    // exhaustive scan answers. It prunes on the claim that a wall
+    // outside the query box cannot fail either safety test, so the
+    // cases that matter are the ones near a box edge — a wall just
+    // inside `clearance`, and a wall the sight line only just clips.
+    let seed = 0x10c8ce;
+    const rnd = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 0x100000000;
+    };
+
+    const walls: PortalWall[] = [];
+    for (let room = 0; room < 12; room++) {
+      const x = rnd() * 1200;
+      const y = rnd() * 900;
+      const w = 80 + rnd() * 200;
+      const h = 80 + rnd() * 200;
+      const step = 11;
+      for (let i = 0; i < w; i += step) {
+        walls.push({ a: { x: x + i, y }, b: { x: x + i + step, y } });
+        walls.push({ a: { x: x + i, y: y + h }, b: { x: x + i + step, y: y + h } });
+      }
+      for (let i = 0; i < h; i += step) {
+        walls.push({ a: { x, y: y + i }, b: { x, y: y + i + step } });
+        walls.push({ a: { x: x + w, y: y + i }, b: { x: x + w, y: y + i + step } });
+      }
+    }
+
+    let mismatches = 0;
+    let probes = 0;
+    let sawUnsafe = false;
+    let sawSafe = false;
+    const spacing = 90;
+    const scratch: number[] = [];
+    for (let trial = 0; trial < 30 && mismatches === 0; trial++) {
+      const origin = { x: rnd() * 1400, y: rnd() * 1100 };
+      // Clearances spanning well under and well over the cell size, so
+      // the disc query is exercised both inside one cell and across
+      // several.
+      const clearance = [3, 18, 55, 140][trial % 4];
+      const grid = new WallGrid(walls, landingCellSize(spacing));
+      for (let ring = 0; ring <= 6; ring++) {
+        const count = ring === 0 ? 1 : ring * 6;
+        for (let i = 0; i < count; i++) {
+          const a = (i / count) * 2 * Math.PI - Math.PI / 2;
+          const p =
+            ring === 0
+              ? { x: origin.x, y: origin.y }
+              : {
+                  x: origin.x + Math.cos(a) * spacing * ring,
+                  y: origin.y + Math.sin(a) * spacing * ring,
+                };
+          const want = isSafeLandingPointExhaustive(p, origin, clearance, walls);
+          const got = grid.isSafeLandingPoint(p, origin, clearance, scratch);
+          probes++;
+          if (want) sawSafe = true;
+          else sawUnsafe = true;
+          if (want !== got) mismatches++;
+        }
+      }
+    }
+    check(
+      "portal landing grid matches the exhaustive scan",
+      mismatches === 0 && sawSafe && sawUnsafe,
+      `${probes} probes over ${walls.length} segments`,
+    );
   }
 
   // --- line of sight (light occlusion) --------------------------------------
