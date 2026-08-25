@@ -193,6 +193,163 @@ function colBinary(
   return out;
 }
 
+
+// --- bitset path ------------------------------------------------------------
+//
+// One bit per pixel, rows word-aligned so a shift can never bleed from
+// the end of one row into the start of the next.
+//
+// "Is any pixel set within r" is computed by DOUBLING: OR the
+// accumulator with itself shifted by s, and its reach grows by s each
+// round. Starting from reach 0 and taking s = min(shift, r - reach)
+// with shift doubling gives exactly reach r in O(log r) passes over the
+// bitset, instead of r passes. Each pass touches w*h/32 words.
+//
+// Erosion is the De Morgan dual: a window is all-set iff its complement
+// contains no set pixel, so erode = NOT dilate(NOT x). That holds under
+// the CLAMPED window convention too, because both sides use the same
+// clamped window. It does mean the padding bits past the end of each
+// row have to be cleared after every complement, or they would dilate
+// back in as real pixels.
+
+const WORD = 32;
+
+function wordsPerRow(w: number): number {
+  return (w + WORD - 1) >>> 5;
+}
+
+function packMask(mask: Uint8Array, w: number, h: number): Uint32Array {
+  const wpr = wordsPerRow(w);
+  const bits = new Uint32Array(wpr * h);
+  for (let y = 0; y < h; y++) {
+    const src = y * w;
+    const dst = y * wpr;
+    for (let x = 0; x < w; x++) {
+      if (mask[src + x]) bits[dst + (x >>> 5)] |= 1 << (x & 31);
+    }
+  }
+  return bits;
+}
+
+function unpackMask(bits: Uint32Array, w: number, h: number): Uint8Array {
+  const wpr = wordsPerRow(w);
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const src = y * wpr;
+    const dst = y * w;
+    for (let x = 0; x < w; x++) {
+      out[dst + x] = (bits[src + (x >>> 5)] >>> (x & 31)) & 1 ? ON : OFF;
+    }
+  }
+  return out;
+}
+
+/** Zero the bits past column w-1 in every row. */
+function clearTail(bits: Uint32Array, w: number, h: number): void {
+  const wpr = wordsPerRow(w);
+  const used = w & 31;
+  if (used === 0) return;
+  const keep = (1 << used) - 1;
+  for (let y = 0; y < h; y++) bits[y * wpr + wpr - 1] &= keep;
+}
+
+function complement(bits: Uint32Array, w: number, h: number): Uint32Array {
+  const out = new Uint32Array(bits.length);
+  for (let i = 0; i < bits.length; i++) out[i] = ~bits[i];
+  clearTail(out, w, h);
+  return out;
+}
+
+/** acc |= acc shifted left and right by `s` columns, within each row. */
+function spreadCols(acc: Uint32Array, w: number, h: number, s: number): void {
+  const wpr = wordsPerRow(w);
+  const wordShift = s >>> 5;
+  const bitShift = s & 31;
+  const row = new Uint32Array(wpr);
+  for (let y = 0; y < h; y++) {
+    const base = y * wpr;
+    for (let i = 0; i < wpr; i++) row[i] = acc[base + i];
+    for (let i = 0; i < wpr; i++) {
+      let left = 0;
+      let right = 0;
+      // shift toward higher columns
+      const a = i - wordShift;
+      if (a >= 0) {
+        left = bitShift === 0 ? row[a] : (row[a] << bitShift) >>> 0;
+        if (bitShift !== 0 && a - 1 >= 0) left |= row[a - 1] >>> (WORD - bitShift);
+      }
+      // shift toward lower columns
+      const b = i + wordShift;
+      if (b < wpr) {
+        right = bitShift === 0 ? row[b] : row[b] >>> bitShift;
+        if (bitShift !== 0 && b + 1 < wpr) {
+          right |= (row[b + 1] << (WORD - bitShift)) >>> 0;
+        }
+      }
+      acc[base + i] |= left | right;
+    }
+  }
+  clearTail(acc, w, h);
+}
+
+/** acc |= acc shifted up and down by `s` rows. */
+function spreadRows(acc: Uint32Array, w: number, h: number, s: number): void {
+  const wpr = wordsPerRow(w);
+  const snapshot = acc.slice();
+  for (let y = 0; y < h; y++) {
+    const base = y * wpr;
+    const up = y - s;
+    const down = y + s;
+    if (up >= 0) {
+      const o = up * wpr;
+      for (let i = 0; i < wpr; i++) acc[base + i] |= snapshot[o + i];
+    }
+    if (down < h) {
+      const o = down * wpr;
+      for (let i = 0; i < wpr; i++) acc[base + i] |= snapshot[o + i];
+    }
+  }
+}
+
+/** Grow every set bit by `r` in both axes, clamped at the borders. */
+function dilateBits(bits: Uint32Array, w: number, h: number, r: number): Uint32Array {
+  const acc = bits.slice();
+  let reach = 0;
+  let step = 1;
+  while (reach < r) {
+    const s = Math.min(step, r - reach);
+    spreadCols(acc, w, h, s);
+    spreadRows(acc, w, h, s);
+    reach += s;
+    step <<= 1;
+  }
+  return acc;
+}
+
+function dilateBinaryBits(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  k: number,
+): Uint8Array {
+  const r = Math.floor(k / 2);
+  if (r === 0) return mask.slice();
+  return unpackMask(dilateBits(packMask(mask, w, h), w, h, r), w, h);
+}
+
+function erodeBinaryBits(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  k: number,
+): Uint8Array {
+  const r = Math.floor(k / 2);
+  if (r === 0) return mask.slice();
+  const inv = complement(packMask(mask, w, h), w, h);
+  const grown = dilateBits(inv, w, h, r);
+  return unpackMask(complement(grown, w, h), w, h);
+}
+
 // --- public API -------------------------------------------------------------
 
 function pass(
@@ -203,9 +360,12 @@ function pass(
   isMax: boolean,
   binary: boolean,
 ): Uint8Array {
-  return binary
-    ? colBinary(rowBinary(mask, w, h, k, isMax), w, h, k, isMax)
-    : colMinMax(rowMinMax(mask, w, h, k, isMax), w, h, k, isMax);
+  if (!binary) {
+    return colMinMax(rowMinMax(mask, w, h, k, isMax), w, h, k, isMax);
+  }
+  return isMax
+    ? dilateBinaryBits(mask, w, h, k)
+    : erodeBinaryBits(mask, w, h, k);
 }
 
 export function dilate(mask: Uint8Array, w: number, h: number, k: number): Uint8Array {

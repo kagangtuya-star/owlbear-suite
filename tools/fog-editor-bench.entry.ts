@@ -45,3 +45,6 @@ bench("traceContours", () => { traceContours(mask, W, H); });
 bench("simplifyDP over all contours", () => { for (const c of contours) simplifyDP(c, 1.5); });
 const simplified = contours.map((c) => simplifyDP(c, 1.5));
 bench("chaikinSmooth over all contours", () => { for (const c of simplified) chaikinSmooth(c, 2, true); });
+
+bench("morphology open  (k=31)", () => { morphOpen(mask, W, H, 31); });
+bench("morphology close (k=31)", () => { morphClose(mask, W, H, 31); });

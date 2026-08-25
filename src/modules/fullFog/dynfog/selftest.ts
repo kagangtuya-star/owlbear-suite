@@ -1085,7 +1085,13 @@ export function runDynfogSelfTest(): TestResult[] {
     let cases = 0;
     let sawBorderHit = false;
     for (let trial = 0; trial < 60 && bad === 0; trial++) {
-      const w = 1 + Math.floor(rnd() * 23);
+      // Widths must straddle the 32-bit word boundary the bitset
+      // implementation packs rows into: with w <= 23 every row fits in
+      // ONE word and the cross-word carry logic in spreadCols never
+      // runs, while the real editor traces 3000px-wide masks.
+      // 31/32/33 and 63/64/65 are the interesting ones.
+      const widths = [1, 2, 7, 23, 31, 32, 33, 40, 63, 64, 65, 80];
+      const w = widths[Math.floor(rnd() * widths.length)];
       const h = 1 + Math.floor(rnd() * 23);
       const mask = new Uint8Array(w * h);
       const density = rnd();
@@ -1097,7 +1103,13 @@ export function runDynfogSelfTest(): TestResult[] {
         for (let y = 0; y < h; y++) mask[y * w] = 255;
         sawBorderHit = true;
       }
-      for (const k of [2, 3, 4, 5, 9, 31]) {
+      // The editor sliders cap kernels at 25, but the implementation
+      // is written for any k and should not quietly break if that cap
+      // is raised. k=200 gives r=100, which is the only way the
+      // doubling ever emits a column shift of a FULL WORD or more
+      // (s reaches 32 only once reach has passed 63) — the wordShift
+      // branch in spreadCols is dead below that.
+      for (const k of [2, 3, 4, 5, 9, 31, 71, 200]) {
         for (const op of ops) {
           const got = run(op, mask, w, h, k);
           const want = _morphologyReference(mask, w, h, k, op);
@@ -1125,6 +1137,35 @@ export function runDynfogSelfTest(): TestResult[] {
       bad === 0 && sawBorderHit,
       `${cases} mask/kernel/op combinations`,
     );
+
+    // One WIDE case, because nothing above reaches the bitset's
+    // whole-word column shift.
+    //
+    // That branch only runs when the doubling emits s >= 32, which
+    // needs r >= 63 — and it only CHANGES the answer when the mask is
+    // also much wider than the reach, otherwise the dilation saturates
+    // the row and a dropped word-shift is invisible. 300 wide with
+    // k=141 (r=70) satisfies both. Without this the branch was dead
+    // under test: zeroing wordShift left every other case green.
+    {
+      const w = 300;
+      const h = 9;
+      const wide = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) {
+        wide[y * w + 5] = 255;
+        wide[y * w + 150] = 255;
+        wide[y * w + w - 3] = 255;
+      }
+      let wideOk = true;
+      for (const op of ops) {
+        const got = run(op, wide, w, h, 141);
+        const want = _morphologyReference(wide, w, h, 141, op);
+        for (let i = 0; i < want.length; i++) {
+          if (got[i] !== want[i]) wideOk = false;
+        }
+      }
+      check("bitset whole-word column shift matches the reference", wideOk);
+    }
 
     // A mask carrying values other than 0/255 must fall back to the
     // general path rather than being silently rounded to binary.
