@@ -319,22 +319,30 @@ function merge(partial: any): SuiteState {
     }
   }
   // 2026-08-25 — the `fullFog` module split into `fogEditor` +
-  // `dynamicFog`. Stored room metadata only knows the old id, and the
-  // spread below would leave the two new ones at their defaults, which
-  // is right for everyone EXCEPT a room that had deliberately turned
-  // fog off. Carry that one decision across, once: if the room stored
-  // `fullFog: false` and has never seen the new ids, start both off.
-  // `fullFog` itself is pinned off — nothing registers against it.
+  // `dynamicFog`. Stored room metadata only knows the old id, so both
+  // new ids fall through to their defaults (on).
+  //
+  // There WAS a migration here that carried a stored `fullFog: false`
+  // across to both new ids, on the theory that it preserved a room's
+  // deliberate decision to turn fog off. It was wrong, and badly so:
+  // on the stable channel no room can hold a DELIBERATE `fullFog:
+  // false`. Before 2026-05-26 the default was `fullFog: !STABLE_HIDES`
+  // — false on stable as a CHANNEL DEFAULT — and the fullFog settings
+  // tab was itself in `HIDDEN_TAB_IDS` on that channel, so a stable GM
+  // had no control anywhere to express a preference. The 1.1.9 release
+  // even hard-pinned `fullFog = true` on read specifically to override
+  // those stale falses.
+  //
+  // So the migration read a channel default as a user decision and
+  // silently switched off BOTH fog modules for every stable room whose
+  // suite metadata had not been rewritten since May — killing the
+  // right-click "编辑地图迷雾" entry and tearing down the wall engine,
+  // on the very release whose headline feature is dynamic fog.
+  //
+  // No replacement: a room that genuinely wants fog off can say so on
+  // the settings tab, which is now visible on both channels.
   const mergedEnabled = { ...DEFAULT_STATE.enabled, ...(partial.enabled ?? {}) };
-  const storedEnabled = (partial.enabled ?? {}) as Record<string, unknown>;
-  if (
-    storedEnabled.fullFog === false &&
-    storedEnabled.fogEditor === undefined &&
-    storedEnabled.dynamicFog === undefined
-  ) {
-    mergedEnabled.fogEditor = false;
-    mergedEnabled.dynamicFog = false;
-  }
+  // `fullFog` itself is pinned off — nothing registers against it.
   mergedEnabled.fullFog = false;
   return {
     enabled: mergedEnabled,

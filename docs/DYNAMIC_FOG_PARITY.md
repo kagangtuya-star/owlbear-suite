@@ -28,7 +28,6 @@
 5. 增加**密门**：玩家看不见、也开不了（§4.1）；
 6. 把迷雾编辑器从动态迷雾里**拆成独立模块**，设置页删掉长篇编辑器手册（§6.1）；
 7. **光源遮挡**：别人的灯默认不可见，除非有无墙视线（§5.2）；
-8. **黑暗视觉**：光源彩色半径以外转黑白（§5.3）。
 
 第二轮里被评估后**放弃**的一项：**历史迷雾**（已探索区域保持可见）。OBR 的
 公开 API 无法把「地形记忆」和「活体 token」分开渲染 —— 迷雾一旦揭开，房间里的
@@ -68,7 +67,7 @@ dynfog/
     toggleChannel.ts           玩家 → GM 的开关广播
     snap.ts                    「离指针最近的墙」查找
   light/
-    config.ts                  LightConfig（上游字段 + ambient / colorRadius）
+    config.ts                  LightConfig（上游字段 + ambient）
     createLightMenu.ts         添加光源 / 光源设置
     edit-page.ts               光源设置面板（fullfog-light-edit.html）
     wallIndex.ts               墙体线段网格索引 + 视线查询
@@ -171,7 +170,7 @@ interface Opening {
 
 与上游 `LightConfig` 字段完全一致：
 `attenuationRadius / sourceRadius / falloff / innerAngle / outerAngle / lightType / rotation`，
-另加两个套件自有字段：`ambient`（豁免遮挡，见 §5.2）和 `colorRadius`（黑暗视觉，见 §5.3）。
+另加一个套件自有字段：`ambient`（豁免遮挡，见 §5.2）。
 `LightActor` 建原生 `Light`，`SelfLightActor` 给「有角度的 PRIMARY 光源」补一个
 半径 75 的自照明（否则持灯人自己站在锥形光的暗区里）。
 
@@ -238,31 +237,34 @@ token 移动提交跑一次（OBR 拖拽期间不发布 item 变更，所以不�
 端点会往内**收一小段**（0.18 格）：墙上的火把 token 就坐在墙上，站在门洞里的
 持灯人两侧都是墙桩，不收的话它们会永远自己挡自己。
 
-## 5.3 黑暗视觉（套件自有，2026-08-25）
+## 5.3 黑暗视觉 —— 已撤除（2026-08-25）
 
-`colorRadius` > 0 时，在光源上挂一个 `EFFECT`：`colorRadius` 以内完全透明，
-到 `attenuationRadius` 为止不透明。关键在混合模式 —— Skia 的 **SATURATION**
-取**源的饱和度**加**背景的色相与亮度**，所以往地图上刷一层中性灰就把颜色抽干了，
-亮度和细节一点不动。不用采样、不用二次渲染，一个 shader 搞定。
+做过，没成，删了。留这一节是为了让下一个想做的人不用把同样的坑再踩一遍。
 
-⚠ **图层必须是 `ATTACHMENT`，不能是 `POST_PROCESS`**。第一版用了后者，结果是
-「一开黑暗视觉整个画面全黑白，彩色区域根本不存在」—— `POST_PROCESS` 名副其实：
-OBR 在**成帧之后**、按**视口空间**跑它，世界空间的那个方框被整个丢掉，`coord`
-横跨的是屏幕而不是光圈，圆心落到屏幕外，于是每个像素都判定在 `rInner` 之外。
-`ATTACHMENT` 是世界空间、且位于 MAP 与 CHARACTER 之上，正好覆盖地形和 token；
-它在迷雾**之下**也没问题 —— 迷雾是不透明的黑，去色后还是黑。
-环内 `zIndex` 取 0 并关掉 `disableAutoZIndex`：混合模式只影响**在它之前**画的东西，
-所以先画就等于放过血条、buff 气泡这些同层后画的元素。
+**想要的效果**：每盏灯一个 `colorRadius`，半径以内保持彩色，从那里到照明边缘
+转成黑白 —— D&D 的暗视。
 
-已知近似（实际都无害）：
+**思路本身是对的**：挂一个 `EFFECT`，shader 在环形区域画中性灰，靠 Skia 的
+**SATURATION** 混合模式抽掉色度而保留亮度与细节。不用采样、不用二次渲染。
 
-- 这个环**不做墙体遮挡**，会隔着墙去色 —— 但墙后本来就在迷雾下，去色后的黑还是黑。
-- 两个黑暗视觉 token 的环叠在一起时，第二个没有颜色可抽，等于空操作。
+**两次都倒在同一件事上：那个 effect 方框到底在哪。**
 
-`EFFECT` item 被 `OBR.scene.items.addItems` 拒收，只能进本地场景 —— 而 dynfog
-的所有子 item 本来就在本地场景里。这也让黑暗视觉天然是**按客户端**的：你的黑白
-只是你的。渲染范围限制为**自己拥有的 token**；GM 拥有场景里几乎所有 NPC，照章
-办事会把大半张地图变成黑白，所以 GM 默认豁免，可用 `fogDarkvisionForGM` 打开预览。
+1. 第一版用 `POST_PROCESS` 图层。表现是「一开就整个画面全黑白，彩色区域根本
+   不存在」。诊断出来了：`POST_PROCESS` 名副其实 —— OBR 在**成帧之后、按视口
+   空间**跑它，世界空间的方框被整个丢掉，`coord` 横跨的是屏幕而不是光圈，圆心
+   落到屏幕外，于是每个像素都判定在 `rInner` 之外。
+2. 第二版改到 `ATTACHMENT`（世界空间，位于 MAP 与 CHARACTER 之上，和 bubbles /
+   statusTracker 两个跑了很久的 Effect 同层），并把 uniform 声明对齐成那份已知
+   可用的写法。**仍然是全黑白。**
+
+第二次失败之后就没有再猜下去的理由了：可疑面还剩「附着 item 时 `position` 到底
+被怎么处理」「非分离混合模式对 alpha 的处理」等好几个，每验证一轮都要一次真人
+上桌测试。投入产出不成立，整个删掉 —— `DarkvisionActor`、`DarkvisionReactor`、
+`LightConfig.colorRadius`、`fogDarkvisionForGM` 设置项。
+
+**下次要做的话，先解决可观测性**：在真实 OBR 会话里加一个能把 effect item 实际
+落点读回来的调试通道。不然就是继续盲改。存量场景里残留的 `colorRadius` 会被
+`normaliseLightConfig` 直接忽略，无需迁移。
 
 ## 6. 设置项（新增）
 
@@ -271,9 +273,7 @@ OBR 在**成帧之后**、按**视口空间**跑它，世界空间的那个方�
 | 套件场景状态 | `fogPlayerDoors` | `true` | 玩家可见门窗指示器并可自行开关（**密门不受此开关影响，永远不可见**） |
 | 套件场景状态 | `fogDoorOverlayAlways` | `false` | GM 不选迷雾工具时也常显门窗指示器 |
 | 套件场景状态 | `fogLightOcclusion` | `true` | 光源遮挡（§5.2） |
-| 套件场景状态 | `fogDarkvisionForGM` | `false` | GM 端也应用黑暗视觉去色环 |
 | 每盏灯 metadata | `ambient` | `false` | 该光源豁免遮挡，对所有人永远可见 |
-| 每盏灯 metadata | `colorRadius` | `0` | 黑暗视觉彩色半径，0 = 关 |
 | **OBR 场景本身** | `scene.fog.filled` | — | 设置面板里的「整张地图铺满迷雾」直通开关。**没打开它，墙和光源不会有任何可见效果** |
 
 ### 6.1 模块拆分（2026-08-25）
@@ -283,7 +283,7 @@ OBR 在**成帧之后**、按**视口空间**跑它，世界空间的那个方�
 | 模块 id | 内容 | 关掉的后果 |
 | --- | --- | --- |
 | `fogEditor` | 右键地图 →「编辑地图迷雾」全屏描边编辑器，没有任何常驻逻辑 | 已描好的迷雾照常工作（墙由下面那个模块生成） |
-| `dynamicFog` | dynfog 引擎全部：墙推导、门 / 密门 / 窗、光源、遮挡、黑暗视觉 | **迷雾不再挡视线**（退回成纯涂黑） |
+| `dynamicFog` | dynfog 引擎全部：墙推导、门 / 密门 / 窗、光源、遮挡 | **迷雾不再挡视线**（退回成纯涂黑） |
 
 `fullFog` 这个 id 保留在类型与状态结构里但已退役（恒为 `false`、`background.ts`
 不再注册），老房间存的 `fullFog: false` 会被一次性迁移成两个新 id 同时关闭。

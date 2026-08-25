@@ -90,7 +90,12 @@ function pxToUnits(px: number): string {
 function unitsToPx(text: string): number {
   const parsed = parseFloat(text);
   if (!Number.isFinite(parsed)) return NaN;
-  const multiplier = gridScale?.parsed.multiplier ?? 1;
+  // Mirror pxToUnits exactly: with no grid scale it shows raw pixels,
+  // so it has to parse raw pixels back. Scaling here regardless meant a
+  // bare focus-then-blur on the Range field, changing nothing,
+  // multiplied attenuationRadius by the grid dpi every time.
+  if (!gridScale) return parsed;
+  const multiplier = gridScale.parsed.multiplier;
   if (multiplier === 0) return NaN;
   return (parsed / multiplier) * gridDpi;
 }

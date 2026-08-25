@@ -68,12 +68,23 @@ import { isGM } from "../../runtime";
  *  still produces something clickable. */
 const MIN_STROKE = 8;
 
-/** Above `Date.now()`, which is what the fog tool stamps onto ordinary
- *  drawings — otherwise the indicators sort under the map's own
- *  scribbles on the player-side DRAWING layer. */
-const Z_LINE = 9_000_000_000_000;
-/** …and the button one above the line it annotates. */
-const Z_BUTTON = Z_LINE + 1;
+/**
+ * Base zIndex for the indicator pair, which depends on the layer and
+ * therefore on the role.
+ *
+ * PLAYER (DRAWING): must sort ABOVE `Date.now()`. That is what Owlbear
+ * stamps on ordinary drawings, so a lower value buries the indicators
+ * under the map's own scribbles.
+ *
+ * GM (CONTROL): must sort BELOW `Date.now()`. The fog tool's own snap
+ * dot and drag preview are built with the SDK's default zIndex — also
+ * `Date.now()`, ~1.79e12 — and live on this same layer. A base above
+ * that hid the orange control points behind the very indicators the GM
+ * was trying to drag a new opening past.
+ */
+function zBase(layer: string): number {
+  return layer === "CONTROL" ? 1_000 : 9_000_000_000_000;
+}
 
 export function openingColor(opening: Opening): string {
   if (opening.kind === "window") {
@@ -282,7 +293,7 @@ export class OpeningOverlayActor extends Actor {
       // swallow every click meant for the button under it.
       .disableHit(true)
       .disableAutoZIndex(true)
-      .zIndex(Z_LINE)
+      .zIndex(zBase(layer))
       .build();
 
     if (!visual.button) {
@@ -307,7 +318,9 @@ export class OpeningOverlayActor extends Actor {
       .maxViewScale(2)
       .locked(true)
       .disableAutoZIndex(true)
-      .zIndex(Z_BUTTON)
+      // One above the line it annotates, so a wide fog stroke cannot
+      // bury its own button.
+      .zIndex(zBase(layer) + 1)
       .build();
 
     this.entries.set(visual.opening.id, {

@@ -71,11 +71,48 @@ export class OpeningActor extends Actor {
     this.polylines = drawingToPolylines(drawing);
     this.polyBoxes = this.polylines.map((p) => bboxOf(p));
     this.openings = readOpenings(parent, this.polylines);
-    this.signature = openingsSignature(this.openings);
     this.cuts = this.buildCuts(drawing);
+    this.signature = this.computeSignature(drawing);
   }
 
-  /** World-space capsule chains for every opening on this drawing that
+  /**
+   * Cheap change key. It is `openingsSignature` PLUS this drawing's
+   * transform and stroke width, but only when the drawing actually
+   * contributes cuts.
+   *
+   * The transform matters to OTHER drawings, not to this one: every
+   * WallActor folds `OpeningReactor.getAllSignature()` into its own key
+   * so that a door on an overlapping shape re-cuts its neighbours. With
+   * only the opening LIST in there, moving or resizing a shape that
+   * owns an open door — or changing its stroke width, which is the cut
+   * radius — left the neighbour's WallActor early-returning on an
+   * unchanged signature, so the hole in its wall stayed at the old
+   * position. Two overlapping rooms sharing a doorway: nudge the left
+   * one and the right one keeps a gap where the door used to be, and
+   * blocks the doorway where it now is.
+   *
+   * The `cuts.length` guard keeps this from undoing the flicker fix. A
+   * drawing with nothing open contributes no cuts, so its transform
+   * cannot affect any neighbour and must NOT bump the global signature
+   * — otherwise dragging any fog shape would re-derive every wall in
+   * the scene.
+   */
+  private computeSignature(drawing: Drawing): string {
+    const base = openingsSignature(this.openings);
+    if (this.cuts.length === 0) return base;
+    const style = (drawing as any).style?.strokeWidth ?? 0;
+    return [
+      base,
+      drawing.position.x,
+      drawing.position.y,
+      drawing.rotation,
+      drawing.scale.x,
+      drawing.scale.y,
+      style,
+    ].join("~");
+  }
+
+  /** World-space capsule chains for every OPEN opening on this drawing.
    *  currently REMOVES its stretch of wall — every open door / secret
    *  door, and every window regardless of its shutter state.
    *  Foreign drawings subtract these so a door on a shared wall opens

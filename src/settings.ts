@@ -3298,10 +3298,20 @@ const TABS: TabDef[] = [
             ? "注：OBR 的墙只影响<b>视线</b>，不影响<b>移动</b>，所以「关着的窗爬不过去」这一半在引擎层面无法强制，只能靠指示器颜色 / 图标传达、由桌面约定。密门的元数据存在共享场景里（OBR 没有仅 DM 可读的存储），玩家翻元数据理论上能发现它 —— 但游戏画面里没有任何可见痕迹。"
             : "Note: Owlbear walls affect VISION only, never movement, so the \"you can't climb through a shut window\" half can't be enforced by the engine — the indicator's colour and icon carry it and the table honours it. Secret-door metadata lives in the shared scene (Owlbear has no GM-only storage), so a player digging through raw metadata could find one — but nothing in the rendered game gives it away."
         }</p>
-        <p style="color:var(--text-dim);font-size:11.5px">${
+        <div style="margin-top:12px;padding:10px 12px;border-radius:6px;border:1px solid #7a5c12;background:rgba(245,166,35,.09)">
+          <div style="color:#f5a623;font-weight:600;font-size:12.5px;margin-bottom:4px">${
+            zh ? "⚠ 请关闭官方 Dynamic Fog 扩展" : "⚠ Turn off the official Dynamic Fog extension"
+          }</div>
+          <p style="margin:0;font-size:11.5px;line-height:1.65;color:var(--text-dim)">${
+            zh
+              ? "本套件<b>已经完整包含</b>官方 <b>Dynamic Fog</b> 的全部功能（墙、门、光源），并在此之上多做了三件官方没有的事：<b>窗户</b>（开关都能看穿）、<b>玩家可开关的门</b>、以及<b>玩家看不见的密门</b>。<br>两个同时开着不会报错，但两边都会从同一批迷雾图形推导墙和光，<b>每面墙、每盏灯都会建两遍</b>，白白翻倍开销。<br>官方扩展里已经画好的<b>门会自动继承</b>过来，关掉它不会丢；<b>光源需要重新添加一次</b>。"
+              : "This suite <b>already contains everything</b> the official <b>Dynamic Fog</b> does — walls, doors, lights — and adds three things it doesn't have: <b>windows</b> (see-through open or shut), <b>doors players can work themselves</b>, and <b>secret doors players never see</b>.<br>Running both is not an error, but both derive walls and lights from the same fog shapes, so <b>every wall and every light is built twice</b> for nothing.<br>Doors you already drew with the official extension are <b>imported automatically</b>, so turning it off won't lose them; <b>lights need adding again</b>."
+          }</p>
+        </div>
+        <p style="color:var(--text-dim);font-size:11.5px;margin-top:10px">${
           zh
-            ? "⚠ 不要和官方的 <b>Dynamic Fog</b> 扩展同时启用：两边都会从同一批迷雾图形推导墙，结果是每面墙各生成两遍（功能上仍然正常，只是白白翻倍开销）。"
-            : "⚠ Don't run this alongside the official <b>Dynamic Fog</b> extension: both derive walls from the same fog shapes, so every wall is built twice. It still works, it just doubles the cost for nothing."
+            ? "⚠ 同理，<b>测试版和稳定版也不要装在同一个房间</b>：两者现在共用同一套场景元数据与工具 id，同时装会互相覆盖设置、并把墙和光建两遍。"
+            : "⚠ For the same reason, <b>don't install the dev and stable channels in one room</b>: they now share one set of scene metadata and tool ids, so they would overwrite each other's settings and build every wall and light twice."
         }</p>
 
         <h4 style="margin-top:12px">${zh ? "光源" : "Lights"}</h4>

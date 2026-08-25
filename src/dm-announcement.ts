@@ -397,14 +397,25 @@ async function loadAndRender(): Promise<void> {
 }
 
 // 2026-05-14 — stamp the running build version into the modal title.
-// The dev build serves `manifest-dev.json`, stable serves
-// `manifest.json`; we try dev first and fall back, so the same code
-// works on both channels (the 404 on the wrong-channel file just
-// falls through).
+//
+// 2026-08-25: this used to try `manifest-dev.json` first and fall back
+// to `manifest.json`, on the assumption that the wrong-channel file
+// would 404. It does not — `public/` ships BOTH manifests in BOTH
+// channels, so the dev one always answered first and the stable build
+// reported itself as some "-dev" version.
+//
+// Pick the channel's own file up front. `BASE_URL` is baked in at build
+// time (`/suite/` or `/suite-dev/`), so it is the one thing that
+// reliably says which build this is. The other name stays as a fallback
+// in case a deploy ever ships only one of the two.
 async function loadVersionIntoTitle(): Promise<void> {
   const titleEl = document.querySelector<HTMLElement>(".head .title");
   if (!titleEl) return;
-  for (const name of ["manifest-dev.json", "manifest.json"]) {
+  const dev = (import.meta.env.BASE_URL || "").includes("suite-dev");
+  const candidates = dev
+    ? ["manifest-dev.json", "manifest.json"]
+    : ["manifest.json", "manifest-dev.json"];
+  for (const name of candidates) {
     try {
       const res = await fetch(assetUrl(name), { cache: "no-cache" });
       if (!res.ok) continue;

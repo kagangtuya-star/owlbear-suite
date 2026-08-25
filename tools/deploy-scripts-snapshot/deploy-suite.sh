@@ -19,7 +19,7 @@ cp -r ../shared/pics/. public/supporter-avatars/
 # Do not use `perl -pi` here: on removable / ownership-less Windows drives it
 # can delete the original file and then fail to rename its temporary file.
 # This rewrite validates the expected declaration before touching the source.
-node -e 'const fs=require("fs");const p="src/feature-flags.ts";const s=fs.readFileSync(p,"utf8");const re=/export const STABLE_HIDES = (true|false);/;if(!re.test(s))throw new Error("STABLE_HIDES declaration not found");fs.writeFileSync(p,s.replace(re,"export const STABLE_HIDES = true;"),"utf8");'
+node -e 'const fs=require("fs");const p="src/feature-flags.ts";const s=fs.readFileSync(p,"utf8");const re=/export const STABLE_HIDES = (true|false);/;if(!re.test(s))throw new Error("STABLE_HIDES declaration not found");fs.writeFileSync(p,s.replace(re,"export const STABLE_HIDES = false;"),"utf8");'
 npm run build
 
 echo "=== [2/4] 打包 dist ==="

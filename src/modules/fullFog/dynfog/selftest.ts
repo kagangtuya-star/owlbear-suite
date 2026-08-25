@@ -718,6 +718,47 @@ export function runDynfogSelfTest(): TestResult[] {
     );
   }
 
+  {
+    // A neighbour's door MOVING has to change this drawing's walls.
+    //
+    // This is the invariant behind OpeningActor.computeSignature folding
+    // in the transform whenever the drawing contributes cuts. WallActor
+    // early-returns on an unchanged signature, so if a moved foreign cut
+    // did not move the signature, the hole would stay where the door used
+    // to be — the wall opens in the wrong place and blocks the right one.
+    const polylines = drawingToPolylines(rectShape(200, 140));
+    const mk = (offsetX: number): Cut => {
+      const points = [
+        { x: 40 + offsetX, y: 0 },
+        { x: 90 + offsetX, y: 0 },
+      ];
+      return {
+        openingId: "shared",
+        parentId: "neighbour",
+        points,
+        radius: 14,
+        bbox: bboxOf(points, 14),
+      };
+    };
+    const at0 = deriveWallPolylines({
+      polylines,
+      openings: [],
+      foreignCuts: [mk(0)],
+    });
+    const at60 = deriveWallPolylines({
+      polylines,
+      openings: [],
+      foreignCuts: [mk(60)],
+    });
+    const flat = (ps: { x: number; y: number }[][]) =>
+      ps.map((p) => p.map((q) => `${q.x.toFixed(3)},${q.y.toFixed(3)}`).join(" ")).join("|");
+    check(
+      "moving a neighbour's open door moves the hole in this wall",
+      flat(at0) !== flat(at60),
+      `pieces ${at0.length} -> ${at60.length}`,
+    );
+  }
+
   // --- line of sight (light occlusion) --------------------------------------
 
   {
