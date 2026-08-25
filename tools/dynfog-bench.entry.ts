@@ -37,3 +37,25 @@ const m = itemMatrix(fakeItem);
 const cutPts = Array.from({ length: 40 }, (_, i) => ({ x: i * 3, y: i * 2 }));
 bench("inverseTransformPoint  x40 (inverts per point)", () => { cutPts.map((p) => inverseTransformPoint(m, p)); }, 2000);
 bench("inverseTransformPoints x40 (inverts once)     ", () => { inverseTransformPoints(m, cutPts); }, 2000);
+
+import { drawingToPolylines } from "../src/modules/fullFog/dynfog/geom/drawing";
+import { deriveWallPolylines, expandContours } from "../src/modules/fullFog/dynfog/geom/wallGeometry";
+import { WallIndex } from "../src/modules/fullFog/dynfog/light/wallIndex";
+
+const bigPath: any = {
+  id: "p", type: "PATH", layer: "FOG", position: { x: 0, y: 0 }, rotation: 0,
+  scale: { x: 1, y: 1 }, metadata: {}, visible: true, locked: false,
+  fillRule: "evenodd",
+  style: { fillColor: "#000", fillOpacity: 0, strokeColor: "#000", strokeOpacity: 1, strokeWidth: 8, strokeDash: [] },
+  commands: polys.flatMap((poly) => poly.map((pt, i) => [i === 0 ? 0 : 1, pt.x, pt.y])),
+};
+bench("drawingToPolylines (50k vertices)", () => { drawingToPolylines(bigPath); }, 30);
+bench("deriveWallPolylines (no openings)", () => {
+  deriveWallPolylines({ polylines: polys, openings: [], foreignCuts: [] });
+}, 50);
+bench("expandContours (50k vertices, 6px)", () => { expandContours(polys, 6, 1); }, 5);
+bench("WallIndex.build (50k segments)", () => { WallIndex.build(polys); }, 20);
+const idx = WallIndex.build(polys);
+bench("WallIndex.blocked x200 queries", () => {
+  for (let i = 0; i < 200; i++) idx.blocked({ x: 100 + i, y: 100 }, { x: 3000, y: 3000 });
+}, 30);

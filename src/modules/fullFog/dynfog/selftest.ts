@@ -23,6 +23,7 @@ import {
 } from "./geom/polyline";
 import { bboxOf, cutRangesForPolyline, type Cut } from "./geom/cut";
 import { deriveWallPolylines, expandContours } from "./geom/wallGeometry";
+import { safeWallOffset } from "../output/wallOffset";
 import { readOpenings } from "./opening/read";
 import { WallIndex } from "./light/wallIndex";
 import {
@@ -975,6 +976,69 @@ export function runDynfogSelfTest(): TestResult[] {
       "batched inverse transform equals the per-point one, exactly",
       same,
       `${pts.length} points`,
+    );
+  }
+
+  {
+    // 墙体外扩 used to test every vertex against every edge — O(n²) per
+    // contour, ~640 ms on a 45k-vertex traced dungeon, paid on every
+    // save and every move of the map. It now indexes the edges in a
+    // uniform grid sized to the furthest a ray can usefully travel.
+    //
+    // That is only legitimate if the grid hands back a SUPERSET of the
+    // edges the brute-force loop would have tested: the clamp takes a
+    // MIN over whatever qualifies, and min over a superset in any order
+    // is the same number. Fuzz the two against each other over shapes
+    // with the features that make offsetting hard — thin necks, sharp
+    // spikes, near-duplicate vertices.
+    let seed = 0x51ed5;
+    const rnd = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 0x100000000;
+    };
+
+    let worst = 0;
+    let cases = 0;
+    let bigEnoughForGrid = false;
+    for (let trial = 0; trial < 25; trial++) {
+      // Ring with a radius that swings in and out, which produces the
+      // pinches the clamp exists for. >=64 vertices so the grid path is
+      // actually taken (below that the code stays brute force).
+      const n = 80 + Math.floor(rnd() * 140);
+      if (n >= 64) bigEnoughForGrid = true;
+      const poly: { x: number; y: number }[] = [];
+      const lobes = 2 + Math.floor(rnd() * 5);
+      const spike = rnd() < 0.4;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        let r = 120 + 70 * Math.sin(a * lobes);
+        // Occasional near-zero radius: a thin neck through the middle.
+        if (spike && i % 17 === 0) r *= 0.12;
+        poly.push({ x: Math.cos(a) * r, y: Math.sin(a) * r });
+      }
+      // A couple of duplicate vertices, which the degenerate guards care about.
+      poly.splice(5, 0, { x: poly[5].x, y: poly[5].y });
+
+      for (const dist of [3, 6, -4, 12]) {
+        const indexed = safeWallOffset([poly], dist, 1, true);
+        const brute = safeWallOffset([poly], dist, 1, false);
+        cases++;
+        if (indexed.length !== brute.length || indexed[0].length !== brute[0].length) {
+          worst = Infinity;
+          break;
+        }
+        for (let i = 0; i < brute[0].length; i++) {
+          const dx = Math.abs(indexed[0][i].x - brute[0][i].x);
+          const dy = Math.abs(indexed[0][i].y - brute[0][i].y);
+          if (dx > worst) worst = dx;
+          if (dy > worst) worst = dy;
+        }
+      }
+    }
+    check(
+      "edge-grid offset is identical to the brute-force offset",
+      worst === 0 && bigEnoughForGrid,
+      `${cases} shape/distance pairs, max coordinate difference ${worst}`,
     );
   }
 
