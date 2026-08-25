@@ -17,6 +17,7 @@ import {
   polylineLength,
   remapT,
   snapToPolyline,
+  snapToPolylines,
   splitPolylineByRanges,
   subPolyline,
 } from "./geom/polyline";
@@ -24,6 +25,11 @@ import { bboxOf, cutRangesForPolyline, type Cut } from "./geom/cut";
 import { deriveWallPolylines, expandContours } from "./geom/wallGeometry";
 import { readOpenings } from "./opening/read";
 import { WallIndex } from "./light/wallIndex";
+import {
+  inverseTransformPoint,
+  inverseTransformPoints,
+  itemMatrix,
+} from "./geom/xform";
 import {
   blocksVision,
   playerOperable,
@@ -756,6 +762,219 @@ export function runDynfogSelfTest(): TestResult[] {
       "moving a neighbour's open door moves the hole in this wall",
       flat(at0) !== flat(at60),
       `pieces ${at0.length} -> ${at60.length}`,
+    );
+  }
+
+  {
+    // Regression cover for the snap maths, which had none. A rewrite to
+    // a result object per SEGMENT — on a traced map that was ~100k
+    // short-lived objects per pointer move. The rewrite has to be
+    // BIT-identical, not merely close: `t` feeds straight into an
+    // opening's stored position, so a last-place-digit difference would
+    // move doors by a hair on every re-derivation.
+    //
+    // This fuzzes both against a straightforward reference written the
+    // old way — fresh object per segment, first-of-equals wins.
+    type Vec = { x: number; y: number };
+    interface RefHit {
+      polyIndex: number;
+      t: number;
+      point: { x: number; y: number };
+      distance: number;
+    }
+    function refClosest(p: Vec, a: Vec, b: Vec) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq < 1e-9) {
+        return {
+          u: 0,
+          point: { x: a.x, y: a.y },
+          distance: Math.hypot(p.x - a.x, p.y - a.y),
+        };
+      }
+      let u = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+      if (u < 0) u = 0;
+      else if (u > 1) u = 1;
+      const qx = a.x + u * dx;
+      const qy = a.y + u * dy;
+      return {
+        u,
+        point: { x: qx, y: qy },
+        distance: Math.hypot(p.x - qx, p.y - qy),
+      };
+    }
+    function refSnapAll(p: Vec, polys: Vec[][]): RefHit | null {
+      let best: RefHit | null = null;
+      for (let pi = 0; pi < polys.length; pi++) {
+        const poly = polys[pi];
+        if (poly.length < 2) continue;
+        let total = 0;
+        for (let i = 0; i < poly.length - 1; i++) {
+          total += Math.hypot(poly[i + 1].x - poly[i].x, poly[i + 1].y - poly[i].y);
+        }
+        if (total < 1e-6) continue;
+        let arc = 0;
+        for (let i = 0; i < poly.length - 1; i++) {
+          const a = poly[i];
+          const b = poly[i + 1];
+          const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+          if (segLen < 1e-9) continue;
+          const c = refClosest(p, a, b);
+          if (best === null || c.distance < best.distance) {
+            best = {
+              polyIndex: pi,
+              t: (arc + c.u * segLen) / total,
+              point: c.point,
+              distance: c.distance,
+            };
+          }
+          arc += segLen;
+        }
+      }
+      return best;
+    }
+
+    // Deterministic LCG — no Math.random, so a failure is reproducible.
+    let seed = 0x2f6e2b1;
+    const rnd = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 0x100000000;
+    };
+
+    let mismatches = 0;
+    let compared = 0;
+    let sawDegenerate = false;
+    for (let trial = 0; trial < 400 && mismatches === 0; trial++) {
+      const polys: Vec[][] = [];
+      const nPolys = 1 + Math.floor(rnd() * 3);
+      for (let k = 0; k < nPolys; k++) {
+        const n = 2 + Math.floor(rnd() * 14);
+        const poly: Vec[] = [];
+        let x = rnd() * 400 - 200;
+        let y = rnd() * 400 - 200;
+        for (let i = 0; i < n; i++) {
+          poly.push({ x, y });
+          // Every so often emit a hairline segment: long enough to pass
+          // the caller's segLen guard, short enough to hit the squared
+          // -length degenerate branch. That asymmetry is exactly what a
+          // careless rewrite would drop.
+          if (rnd() < 0.12) {
+            sawDegenerate = true;
+            x += 1e-6;
+            y += 1e-6;
+          } else {
+            x += rnd() * 80 - 40;
+            y += rnd() * 80 - 40;
+          }
+        }
+        polys.push(poly);
+      }
+      const p: Vec = { x: rnd() * 500 - 250, y: rnd() * 500 - 250 };
+
+      const got = snapToPolylines(p, polys);
+      const want = refSnapAll(p, polys);
+      compared++;
+      const same =
+        (got === null && want === null) ||
+        (got !== null &&
+          want !== null &&
+          got.polyIndex === want.polyIndex &&
+          got.t === want.t &&
+          got.point.x === want.point.x &&
+          got.point.y === want.point.y &&
+          got.distance === want.distance);
+      if (!same) {
+        mismatches++;
+        console.log(
+          "     mismatch on trial " + trial + ": got=" + JSON.stringify(got) +
+            " want=" + JSON.stringify(want),
+        );
+      }
+
+      // Single-contour path, which has its own copy of the loop.
+      const one = snapToPolyline(p, polys[0]);
+      const wantOne = refSnapAll(p, [polys[0]]);
+      const sameOne =
+        (one === null && wantOne === null) ||
+        (one !== null &&
+          wantOne !== null &&
+          one.t === wantOne.t &&
+          one.point.x === wantOne.point.x &&
+          one.point.y === wantOne.point.y &&
+          one.distance === wantOne.distance);
+      if (!sameOne) {
+        mismatches++;
+        console.log("     snapToPolyline mismatch on trial " + trial);
+      }
+    }
+    check(
+      "snap matches an independent reference implementation",
+      mismatches === 0 && sawDegenerate,
+      `${compared} random cases, hairline segments exercised: ${sawDegenerate}`,
+    );
+
+    // Random floats never tie exactly, so the fuzz above cannot pin
+    // down which of two EQUALLY close candidates wins. Pin it: two
+    // parallel contours straddling the query point are exactly the same
+    // distance away, and the original kept the FIRST (`<`, not `<=`).
+    //
+    // A symmetric V does NOT test this — at its apex both arms return
+    // the same point and the same t, so the tie is invisible. It has to
+    // be two candidates whose ANSWERS differ.
+    const above: Vec[] = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+    ];
+    const below: Vec[] = [
+      { x: 0, y: 20 },
+      { x: 100, y: 20 },
+    ];
+    const midway = snapToPolylines({ x: 50, y: 10 }, [above, below]);
+    const midwayRef = refSnapAll({ x: 50, y: 10 }, [above, below]);
+    check(
+      "equidistant candidates keep the FIRST match",
+      midway !== null &&
+        midwayRef !== null &&
+        midway.polyIndex === 0 &&
+        midway.polyIndex === midwayRef.polyIndex &&
+        midway.point.y === 0 &&
+        midway.distance === midwayRef.distance,
+      midway
+        ? `polyIndex=${midway.polyIndex} y=${midway.point.y} d=${midway.distance}`
+        : "no hit",
+    );
+  }
+
+  {
+    // inverseTransformPoints exists only to hoist ONE matrix inversion
+    // out of a per-point loop. It has to agree with the per-point
+    // function exactly — cut geometry is re-expressed through it on
+    // every wall re-derivation, so a drifting last digit would creep
+    // door positions on overlapping shapes.
+    const item: any = {
+      position: { x: 137.5, y: -84.25 },
+      rotation: 31.7,
+      scale: { x: 1.37, y: 0.82 },
+    };
+    const matrix = itemMatrix(item);
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 12.5, y: -7.25 },
+      { x: -400, y: 900.125 },
+      { x: 1e-7, y: -1e-7 },
+    ];
+    const oneByOne = pts.map((p) => inverseTransformPoint(matrix, p));
+    const batched = inverseTransformPoints(matrix, pts);
+    const same =
+      batched.length === oneByOne.length &&
+      batched.every(
+        (b, i) => b.x === oneByOne[i].x && b.y === oneByOne[i].y,
+      );
+    check(
+      "batched inverse transform equals the per-point one, exactly",
+      same,
+      `${pts.length} points`,
     );
   }
 

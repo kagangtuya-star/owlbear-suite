@@ -18,7 +18,7 @@
 // typical stroke widths — far below what a player can perceive.
 
 import type { Vector2 } from "@owlbear-rodeo/sdk";
-import { polylineLength, type TRange } from "./polyline";
+import { type TRange } from "./polyline";
 
 export interface BBox {
   minX: number;
@@ -142,25 +142,30 @@ export function cutRangesForPolyline(
 ): TRange[] {
   if (poly.length < 2 || cuts.length === 0) return [];
 
-  const total = polylineLength(poly);
-  if (total < 1e-6) return [];
-
-  // Only consider cuts whose bbox touches this polyline's bbox.
+  // Bbox rejection FIRST. Most contours on a traced map are nowhere
+  // near any door, and this is the branch that skips them — running it
+  // before the arc-length walk means those contours cost one O(n) pass
+  // instead of two.
   const polyBox = bboxOf(poly);
   const relevant = cuts.filter((c) => bboxIntersects(polyBox, c.bbox));
   if (relevant.length === 0) return [];
 
-  const minRadius = Math.min(...relevant.map((c) => c.radius));
-  const step = Math.max(1, minRadius / 2);
-  const samples = Math.min(20000, Math.max(8, Math.ceil(total / step)));
-
-  // Precompute cumulative arc length so t → point is O(1)-ish.
+  // Cumulative arc length, so t → point is O(log n). The total is just
+  // its last element — this used to call polylineLength as well, which
+  // is the same additions in the same order, so taking it from here is
+  // bit-identical, not merely close.
   const cum: number[] = [0];
   for (let i = 0; i < poly.length - 1; i++) {
     cum.push(
       cum[i] + Math.hypot(poly[i + 1].x - poly[i].x, poly[i + 1].y - poly[i].y),
     );
   }
+  const total = cum[cum.length - 1];
+  if (total < 1e-6) return [];
+
+  const minRadius = Math.min(...relevant.map((c) => c.radius));
+  const step = Math.max(1, minRadius / 2);
+  const samples = Math.min(20000, Math.max(8, Math.ceil(total / step)));
   const pointAt = (t: number): Vector2 | null => {
     const target = Math.max(0, Math.min(1, t)) * total;
     // Binary search the segment containing `target`.

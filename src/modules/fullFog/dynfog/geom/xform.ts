@@ -33,6 +33,30 @@ export function inverseTransformPoint(
   return MathM.decompose(MathM.multiply(inverse, p)).position;
 }
 
+/**
+ * Same, for a whole polyline against ONE matrix.
+ *
+ * `inverseTransformPoint` inverts the matrix it is given, so mapping it
+ * over N points inverted the same matrix N times. Cuts are re-expressed
+ * in a neighbour's local space on every wall re-derivation, which is
+ * every door toggle in the scene, so that multiplied up.
+ *
+ * The per-point arithmetic is untouched — same `multiply`, same
+ * `decompose`, same order — so the output is identical, not merely
+ * equivalent.
+ */
+export function inverseTransformPoints(
+  matrix: Matrix,
+  points: Vector2[],
+): Vector2[] {
+  const inverse = MathM.inverse(matrix);
+  return points.map(
+    (point) =>
+      MathM.decompose(MathM.multiply(inverse, MathM.fromPosition(point)))
+        .position,
+  );
+}
+
 /** Uniform-ish world scale factor of a matrix, used to convert a
  *  world-space distance threshold (e.g. the door tool's 75px snap)
  *  into the item's local units. Non-uniform scales fall back to the

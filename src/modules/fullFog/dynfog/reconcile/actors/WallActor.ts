@@ -22,7 +22,7 @@ import { deriveWallPolylines, expandContours } from "../../geom/wallGeometry";
 import type { Cut } from "../../geom/cut";
 import {
   identityMatrix,
-  inverseTransformPoint,
+  inverseTransformPoints,
   itemMatrix,
   matrixScaleFactor,
   transformPoint,
@@ -260,7 +260,7 @@ export class WallActor extends Actor {
     const matrix = itemMatrix(parent);
     const scale = matrixScaleFactor(matrix) || 1;
     return cuts.map((cut) => {
-      const points = cut.points.map((p) => inverseTransformPoint(matrix, p));
+      const points = inverseTransformPoints(matrix, cut.points);
       const radius = cut.radius / scale;
       let minX = Infinity;
       let minY = Infinity;
