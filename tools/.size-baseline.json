@@ -42,7 +42,7 @@
     "resource": 7363,
     "rolldown": 410,
     "search": 13321,
-    "settings": 63417,
+    "settings": 61794,
     "sfx": 2131,
     "shared": 853,
     "spellcasting": 351,
@@ -63,10 +63,10 @@
     "wallOffset": 3651,
     "xlsx": 1809
   },
-  "totalChunkGzip": 405477,
+  "totalChunkGzip": 403854,
   "bootChunks": 33,
   "bootGzip": 117043,
-  "sourceFiles": 192,
-  "sourceLines": 76077,
+  "sourceFiles": 190,
+  "sourceLines": 75468,
   "publicBytes": 9254539
 }

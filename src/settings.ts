@@ -25,8 +25,6 @@ import {
 import { ICONS } from "./icons";
 import { assetUrl } from "./asset-base";
 import { STABLE_HIDES } from "./feature-flags";
-import bundledSupportersZh from "../public/supporters.zh.json";
-import bundledSupportersEn from "../public/supporters.en.json";
 import {
   importLocalJson,
   importLocalMd,
@@ -108,165 +106,12 @@ let bubbleVerticalOffset = DEFAULT_BUBBLES_VERTICAL_OFFSET;
 let bubbleOffsetByText = false;
 let bubbleOverheadMode = false;
 
-interface Supporter {
-  name: string;
-  amount: number;
-}
-
-let sharedSupportersZh: Supporter[] = normalizeSupporterArray(bundledSupportersZh);
-let sharedSupportersEn: Supporter[] = normalizeSupporterArray(bundledSupportersEn);
-
-// Single-source-of-truth for the supporter list is `shared/supporters.zh.json`
-// (and `shared/supporters.en.json`). Each deploy script does
-//   `cp ../shared/supporters.zh.json public/supporters.zh.json`
-// before `vite build`, so editing only `shared/...` is enough — the public/
-// copy gets refreshed automatically. To keep `npm run dev` (no deploy) in
-// sync, also commit the same change to `obr-suite/public/supporters.zh.json`.
-//
-// There is intentionally no hardcoded fallback array here: an empty supporter
-// list rendering as "no backers" is correct if the JSON is genuinely empty,
-// and a stale hardcoded list silently shadowing real data has bitten us
-// before (see git history around 2026-05-08).
-
-// 2026-05-18 — supporter-avatar lookup. Pic files live in
-// public/supporter-avatars/ (sourced from /shared/pics/ at deploy
-// time). Filename → supporter name is fuzzy-matched: case-insensitive,
-// underscores treated as dots, trailing punctuation trimmed. This map
-// lists every shipped avatar with the EXACT supporter-name string in
-// supporters.zh.json so the lookup is O(1) at render time.
-//
-// Add a new avatar = drop the file in /shared/pics/ + add one row
-// below. (Auto-generation from a directory listing is impractical
-// without a build step that reads /public/ at build time.)
-const SUPPORTER_AVATARS: Record<string, string> = {
-  "Dino":                       "supporter-avatars/Dino.jpg",
-  "St.Monk":                    "supporter-avatars/St_Monk.png",
-  "lingkkkkuang":               "supporter-avatars/lingkkkkuang.png",
-  "不周":                        "supporter-avatars/不周.png",
-  "凸守早苗":                    "supporter-avatars/凸守早苗.png",
-  "咖啡":                        "supporter-avatars/咖啡.png",
-  "姜川安.":                     "supporter-avatars/姜川安.jpg",
-  "折云":                        "supporter-avatars/折云.jpg",
-  "桌角剧团的囧神":              "supporter-avatars/桌角剧团的囧神.png",
-  "武御":                        "supporter-avatars/武御.png",
-  "蚀星ErosionStar":             "supporter-avatars/蚀星Erosionstar.png",
-  "跑冰风谷水群被抓的某位":      "supporter-avatars/跑冰风谷水群被抓的某位.png",
-  "鱼喵":                        "supporter-avatars/鱼喵.png",
-  "克雷锰特":                    "supporter-avatars/克雷锰特.png",
-  "xhchi_小火车":                "supporter-avatars/xhchi_小火车.png",
-};
-
-function findSupporterAvatar(name: string): string | null {
-  // Fast path: exact match.
-  const exact = SUPPORTER_AVATARS[name];
-  if (exact) return exact;
-  // Fuzzy path: case-insensitive + strip trailing dots/spaces/whitespace.
-  // Keeps the map small even if a supporter's name has variant casing
-  // ("ErosionStar" vs "Erosionstar"). Looks up by normalised key.
-  const norm = name.toLowerCase().replace(/[.\s]+$/, "");
-  for (const [k, v] of Object.entries(SUPPORTER_AVATARS)) {
-    if (k.toLowerCase().replace(/[.\s]+$/, "") === norm) return v;
-  }
-  return null;
-}
-
-function supportersHtml(lang: Language): string {
-  const source =
-    lang === "en" && sharedSupportersEn.length > 0
-      ? sharedSupportersEn
-      : sharedSupportersZh;
-  const list = source.map((s) => {
-    const tier = supporterTier(s.amount);
-    const amount = Number.isInteger(s.amount) ? String(s.amount) : String(s.amount);
-    const size = supporterFontSize(s.amount);
-    // 2026-05-18 — when an avatar exists for this supporter, render
-    // a small round image BEFORE the name, sized to the text's
-    // computed font-size. `loading="lazy" + decoding="async"` keeps
-    // the settings page fast even with many avatars — the browser
-    // only fetches each pic when it scrolls into view, then caches
-    // by URL across re-renders. The supporter <span> becomes
-    // inline-flex so the img + name baseline-align cleanly without
-    // disrupting the existing wrap layout.
-    const avatarUrl = findSupporterAvatar(s.name);
-    const avatarHtml = avatarUrl
-      ? `<img class="backer-avatar" src="${escapeAttr(assetUrl(avatarUrl))}" alt="" loading="lazy" decoding="async" style="width:${size}px;height:${size}px">`
-      : "";
-    return `<span class="backer ${tier} ${avatarHtml ? "has-avatar" : ""}" data-amount="${escapeAttr(amount)}" style="font-size:${size}px">${avatarHtml}${escapeAttr(s.name)}</span>`;
-  }).join("");
-  return lang === "zh"
-    ? `<h3>${ICONS.heart} 鸣谢</h3>
-       <div class="backers-box">
-         <p>感谢以下支持过作者的小伙伴：</p>
-         <div class="backers">${list}</div>
-       </div>`
-    : `<h3>${ICONS.heart} Thanks</h3>
-       <div class="backers-box">
-         <p>Thanks to everyone who's chipped in to keep this project alive:</p>
-         <div class="backers">${list}</div>
-       </div>`;
-}
-
-function supporterTier(amount: number): string {
-  if (amount >= 100) return "tier5";
-  if (amount >= 50) return "tier4";
-  if (amount >= 30) return "tier3";
-  if (amount >= 20) return "tier2";
-  return "tier1";
-}
-
-function supporterFontSize(amount: number): number {
-  // Continuous sqrt scaling so every donation amount renders at a
-  // slightly different size. The previous 4-tier staircase (¥20-29
-  // = 11px, ¥30-49 = 13px, ...) bucketed obviously different
-  // contributions into the same visual weight — ¥20 and ¥25 looked
-  // identical even though one is 25% larger. sqrt gives meaningful
-  // gradation at the low/mid range while diminishing returns at the
-  // top so a ¥150 doesn't dwarf a ¥100. Clamped to [9.5, 24] to
-  // keep the chip row from blowing out the panel width.
-  //
-  // Sample points: ¥5 → 10.5 / ¥10 → 11.9 / ¥20 → 13.9 / ¥25 →
-  // 14.8 / ¥30 → 15.5 / ¥50 → 18.0 / ¥100 → 22.5 / ¥150 → 24
-  // (clamped). Tier classes (font-weight / halo) still come from
-  // supporterTier so the visual hierarchy of "big donors" is also
-  // expressed via boldness, not just size.
-  const raw = 7 + 1.55 * Math.sqrt(Math.max(0, amount));
-  const clamped = Math.max(9.5, Math.min(24, raw));
-  return Math.round(clamped * 10) / 10;
-}
-
-function normalizeSupporter(v: unknown): Supporter | null {
-  if (!v || typeof v !== "object") return null;
-  const o = v as { name?: unknown; amount?: unknown };
-  const name = typeof o.name === "string" ? o.name.trim() : "";
-  if (!name) return null;
-  const raw = typeof o.amount === "number" ? o.amount : Number(o.amount);
-  return { name, amount: Number.isFinite(raw) ? raw : 10 };
-}
-
-function normalizeSupporterArray(v: unknown): Supporter[] {
-  return Array.isArray(v)
-    ? v.map(normalizeSupporter).filter((item): item is Supporter => !!item)
-    : [];
-}
-
-async function loadSupporterFile(path: string): Promise<Supporter[]> {
-  const res = await fetch(assetUrl(path), { cache: "no-cache" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
-  return Array.isArray(json)
-    ? json.map(normalizeSupporter).filter((v): v is Supporter => !!v)
-    : [];
-}
-
-async function loadSupporters(): Promise<void> {
-  try {
-    const next = await loadSupporterFile("supporters.zh.json");
-    if (next.length > 0) sharedSupportersZh = next;
-  } catch (e) { console.warn("[obr-suite/settings] supporters.zh.json refresh failed", e); }
-  try {
-    sharedSupportersEn = await loadSupporterFile("supporters.en.json");
-  } catch (e) { console.warn("[obr-suite/settings] supporters.en.json refresh failed", e); }
-}
+// 2026-08-25 — the supporter-rendering subsystem that used to live here
+// (bundled JSON, avatar map, tier/font sizing, supportersHtml and the
+// network refresh) was removed: `supportersHtml` had no callers, so
+// nothing in this page ever rendered it. The Support tab shows the
+// static SUPPORT copy instead. The live version of all of it still runs
+// in src/supporter-overlay-page.ts, which is its own entry.
 
 function readBubbleThresholdFromMeta(meta: Record<string, unknown>): number {
   const settings = meta[BUBBLES_SETTINGS_KEY] as { playerThreshold?: unknown } | undefined;
@@ -3750,31 +3595,6 @@ function findTab(id: string): TabDef {
   return VISIBLE_TABS.find((t) => t.id === id) ?? VISIBLE_TABS[0];
 }
 
-function moduleLabelKey(id: ModuleId): string {
-  switch (id) {
-    case "timeStop": return lang === "zh" ? "时停模式" : "Time Stop";
-    case "focus": return lang === "zh" ? "同步视口" : "Sync Viewport";
-    case "bestiary": return lang === "zh" ? "怪物图鉴" : "Bestiary";
-    case "characterCards": return lang === "zh" ? "角色卡" : "Character Cards";
-    case "initiative": return lang === "zh" ? "先攻追踪" : "Initiative Tracker";
-    case "search": return lang === "zh" ? "全局搜索" : "Global Search";
-    case "dice": return lang === "zh" ? "定位骰子" : "Tactical Dice";
-    case "portals": return lang === "zh" ? "传送门" : "Portals";
-    case "bubbles": return lang === "zh" ? "血量气泡" : "HP Bubbles";
-    case "statusTracker": return lang === "zh" ? "状态追踪" : "Status Tracker";
-    case "resourceTracker": return lang === "zh" ? "资源追踪" : "Resource Tracker";
-    case "hpBar": return lang === "zh" ? "小血条组件" : "HP Bar";
-    case "metadataInspector": return lang === "zh" ? "元数据检查" : "Metadata Inspector";
-    case "fullFog": return lang === "zh" ? "迷雾（已拆分）" : "Fog (retired)";
-    case "fogEditor": return lang === "zh" ? "迷雾编辑器" : "Fog Editor";
-    case "dynamicFog": return lang === "zh" ? "动态迷雾" : "Dynamic Fog";
-    case "trickster": return lang === "zh" ? "捣蛋鬼在哪？" : "Trickster Marker";
-    case "circleImage": return lang === "zh" ? "圆形图片" : "Circle Image";
-    case "follow": return lang === "zh" ? "跟随" : "Follow";
-    case "musicBoard": return lang === "zh" ? "音乐板" : "Music Board";
-    case "transform": return lang === "zh" ? "变身" : "Transform";
-  }
-}
 
 // 2026-05-12 — supporter overlay coordination. When the user is on
 // the "support" tab, an offscreen fullscreen modal (opened by
@@ -3898,9 +3718,10 @@ OBR.onReady(async () => {
     if (activeTab === "library") renderContent();
   });
   await refreshBubbleSettings();
-  void loadSupporters().then(() => {
-    if (activeTab === "support") renderContent();
-  });
+  // (was: void loadSupporters() — it fetched supporters.zh/en.json into
+  // variables nothing read, then re-rendered a tab whose body is the
+  // static SUPPORT constant. Two network requests per settings open for
+  // no rendered difference. Removed with the rest of that subsystem.)
   // Install debug-overlay listener so this iframe also shows the
   // yellow tint when the user toggles the new debug-mode switch.
   try {
