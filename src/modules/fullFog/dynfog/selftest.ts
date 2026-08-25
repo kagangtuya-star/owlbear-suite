@@ -24,6 +24,13 @@ import {
 import { bboxOf, cutRangesForPolyline, type Cut } from "./geom/cut";
 import { deriveWallPolylines, expandContours } from "./geom/wallGeometry";
 import { safeWallOffset } from "../output/wallOffset";
+import {
+  close as morphClose,
+  dilate as morphDilate,
+  erode as morphErode,
+  open as morphOpen,
+  _morphologyReference,
+} from "../refinement/morphology";
 import { readOpenings } from "./opening/read";
 import { WallIndex } from "./light/wallIndex";
 import {
@@ -1043,6 +1050,95 @@ export function runDynfogSelfTest(): TestResult[] {
       worst === 0 && bigEnoughForGrid,
       `${cases} shape/distance pairs, max coordinate difference ${worst}`,
     );
+  }
+
+  {
+    // Morphology got a binary fast path (running counts) alongside the
+    // general monotonic-queue implementation, picked by checking the
+    // input. Fuzz the two against each other on masks that stress the
+    // things separable morphology gets wrong: borders, where the window
+    // is CLAMPED not padded; single isolated pixels; full rows; even vs
+    // odd kernels; and kernels wider than the mask itself.
+    let seed = 0xbeef01;
+    const rnd = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 0x100000000;
+    };
+
+    const ops = ["dilate", "erode", "open", "close"] as const;
+    const run = (
+      op: (typeof ops)[number],
+      m: Uint8Array,
+      w: number,
+      h: number,
+      k: number,
+    ) =>
+      op === "dilate"
+        ? morphDilate(m, w, h, k)
+        : op === "erode"
+          ? morphErode(m, w, h, k)
+          : op === "open"
+            ? morphOpen(m, w, h, k)
+            : morphClose(m, w, h, k);
+
+    let bad = 0;
+    let cases = 0;
+    let sawBorderHit = false;
+    for (let trial = 0; trial < 60 && bad === 0; trial++) {
+      const w = 1 + Math.floor(rnd() * 23);
+      const h = 1 + Math.floor(rnd() * 23);
+      const mask = new Uint8Array(w * h);
+      const density = rnd();
+      for (let i = 0; i < mask.length; i++) mask[i] = rnd() < density ? 255 : 0;
+      // Guarantee some cases with set pixels hard against an edge, which
+      // is where a padded-vs-clamped mix-up shows up.
+      if (trial % 3 === 0) {
+        for (let x = 0; x < w; x++) mask[x] = 255;
+        for (let y = 0; y < h; y++) mask[y * w] = 255;
+        sawBorderHit = true;
+      }
+      for (const k of [2, 3, 4, 5, 9, 31]) {
+        for (const op of ops) {
+          const got = run(op, mask, w, h, k);
+          const want = _morphologyReference(mask, w, h, k, op);
+          cases++;
+          if (got.length !== want.length) {
+            bad++;
+            break;
+          }
+          for (let i = 0; i < want.length; i++) {
+            if (got[i] !== want[i]) {
+              bad++;
+              console.log(
+                `     ${op} k=${k} ${w}x${h} differs at ${i}: ${got[i]} vs ${want[i]}`,
+              );
+              break;
+            }
+          }
+          if (bad > 0) break;
+        }
+        if (bad > 0) break;
+      }
+    }
+    check(
+      "binary morphology matches the general implementation",
+      bad === 0 && sawBorderHit,
+      `${cases} mask/kernel/op combinations`,
+    );
+
+    // A mask carrying values other than 0/255 must fall back to the
+    // general path rather than being silently rounded to binary.
+    const grey = new Uint8Array(6 * 5);
+    for (let i = 0; i < grey.length; i++) grey[i] = (i * 37) % 256;
+    let greyOk = true;
+    for (const op of ops) {
+      const got = run(op, grey, 6, 5, 3);
+      const want = _morphologyReference(grey, 6, 5, 3, op);
+      for (let i = 0; i < want.length; i++) {
+        if (got[i] !== want[i]) greyOk = false;
+      }
+    }
+    check("non-binary masks still take the general path", greyOk);
   }
 
   // --- line of sight (light occlusion) --------------------------------------
