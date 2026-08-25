@@ -80,20 +80,6 @@ export function defaultOpenState(_kind: OpeningKind): boolean {
   return false;
 }
 
-/** Labels for the two states, which differ per kind — a shut door is
- *  "closed", a shut window is "glazed". Used by tooltips / settings. */
-export function stateLabel(
-  kind: OpeningKind,
-  open: boolean,
-  en: boolean,
-): string {
-  if (kind === "window") {
-    if (open) return en ? "Open (passable)" : "敞开（可通行）";
-    return en ? "Glazed (see-through)" : "玻璃（可视，不可通行）";
-  }
-  return open ? (en ? "Open" : "打开") : en ? "Closed" : "关闭";
-}
-
 let idCounter = 0;
 
 /** Collision-resistant id that doesn't need `crypto` (background
