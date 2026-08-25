@@ -16,6 +16,8 @@ import type { Opening } from "./opening/types";
 import {
   COLOR_DOOR_CLOSED,
   COLOR_DOOR_OPEN,
+  COLOR_SECRET_CLOSED,
+  COLOR_SECRET_OPEN,
   COLOR_WINDOW_CLOSED,
   COLOR_WINDOW_OPEN,
 } from "./ids";
@@ -86,6 +88,9 @@ function openingColor(o: Opening): string {
   if (o.kind === "window") {
     return o.open ? COLOR_WINDOW_OPEN : COLOR_WINDOW_CLOSED;
   }
+  if (o.kind === "secret") {
+    return o.open ? COLOR_SECRET_OPEN : COLOR_SECRET_CLOSED;
+  }
   return o.open ? COLOR_DOOR_OPEN : COLOR_DOOR_CLOSED;
 }
 
@@ -115,14 +120,17 @@ function buildPanels(): Panel[] {
   const panels: Panel[] = [];
   const origin = { x: 0, y: 0 };
 
-  // 1 — a room with one closed door, one open door and one window.
+  // 1 — every opening kind at once, in the state that best shows what
+  //     it does to the wall.
   {
     const room = rect(200, 140, origin);
     const contours = drawingToPolylines(room);
     const openings: Opening[] = [
-      opening({ id: "closed", kind: "door", open: false, t1: 0.06, t2: 0.16 }),
-      opening({ id: "open", kind: "door", open: true, t1: 0.33, t2: 0.43 }),
-      opening({ id: "win", kind: "window", open: true, t1: 0.62, t2: 0.72 }),
+      opening({ id: "closed", kind: "door", open: false, t1: 0.04, t2: 0.12 }),
+      opening({ id: "open", kind: "door", open: true, t1: 0.28, t2: 0.36 }),
+      // Shut, and STILL a gap: that is the whole point of a window.
+      opening({ id: "win", kind: "window", open: false, t1: 0.52, t2: 0.6 }),
+      opening({ id: "secret", kind: "secret", open: false, t1: 0.76, t2: 0.84 }),
     ];
     const walls = deriveWallPolylines({
       polylines: contours,
@@ -130,8 +138,8 @@ function buildPanels(): Panel[] {
       foreignCuts: [],
     });
     panels.push({
-      title: "Doors and windows on one fog rectangle",
-      note: "closed door keeps its wall · open door and window cut a gap",
+      title: "All four opening kinds on one fog rectangle",
+      note: "shut door + shut secret door keep their wall · open door and SHUT window both cut a gap",
       outline: contours,
       walls,
       markers: openings.map((o) => ({
@@ -270,21 +278,21 @@ function buildPanels(): Panel[] {
       },
     });
     const contours = drawingToPolylines(curve);
-    const win = opening({ id: "w", kind: "window", open: true, t1: 0.4, t2: 0.55 });
+    const win = opening({ id: "w", kind: "window", open: false, t1: 0.4, t2: 0.55 });
     const walls = deriveWallPolylines({
       polylines: contours,
       openings: [win],
       foreignCuts: [],
     });
     panels.push({
-      title: "Freehand curve walls, with a window cut into the middle",
-      note: "cardinal spline sampled the same way Owlbear renders it",
+      title: "Freehand curve walls, with a shut window in the middle",
+      note: "cardinal spline sampled the same way Owlbear renders it — the window is see-through shut",
       outline: contours,
       walls,
       markers: [
         {
           points: subPolyline(contours[0], win.t1, win.t2),
-          color: COLOR_WINDOW_OPEN,
+          color: COLOR_WINDOW_CLOSED,
         },
       ],
     });

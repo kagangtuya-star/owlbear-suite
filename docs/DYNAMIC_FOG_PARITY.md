@@ -16,11 +16,24 @@
 | 门 / 窗 | `door/` — 开口用 `{polyIndex, t1, t2}` 存在 outline Path 上 | 同上：只能画在 outline Path 上，普通墙上画不了门窗；没有直线（Line）工具 |
 | 光源 | `light/` — 自己一套 `LightConfig`，只有 `attenuationRadius / sourceRadius / falloff` | 缺 `innerAngle / outerAngle / lightType / rotation`，没有 SelfLight、没有 PRIMARY/SECONDARY，设置面板也是另一套 |
 
-用户诉求：
+用户诉求（第一轮）：
 
 1. 完整复刻 dynamic-fog 的功能；
 2. 在此之上增加**窗户**；
 3. **玩家可见门窗开关并能自行开关**。
+
+第二轮（桌面实测后）：
+
+4. 窗户**开关都要能看见外面**，只有「能不能钻过去」随状态变（§4.1）；
+5. 增加**密门**：玩家看不见、也开不了（§4.1）；
+6. 把迷雾编辑器从动态迷雾里**拆成独立模块**，设置页删掉长篇编辑器手册（§6.1）；
+7. **光源遮挡**：别人的灯默认不可见，除非有无墙视线（§5.2）；
+8. **黑暗视觉**：光源彩色半径以外转黑白（§5.3）。
+
+第二轮里被评估后**放弃**的一项：**历史迷雾**（已探索区域保持可见）。OBR 的
+公开 API 无法把「地形记忆」和「活体 token」分开渲染 —— 迷雾一旦揭开，房间里的
+哥布林也一起可见。唯一忠实的做法是客户端重新解码地图图片、按已探索区域裁剪去色、
+再作为本地 IMAGE 压在迷雾之上，属于大工程且有明显性能风险。
 
 ## 2. 总体架构
 
@@ -45,21 +58,23 @@ dynfog/
                OpeningOverlayActor  LightOverlayActor
     reactors/  对应六个
   opening/
-    types.ts                   Opening（door | window）
+    types.ts                   Opening（door | window | secret）+ 语义谓词
     read.ts                    读取 + 上游 Door[] 兼容转换
     mutate.ts                  增 / 删 / 开关（顺带迁移上游元数据）
   tools/
     createLineMode.ts          直线墙工具（上游 Line mode）
-    createOpeningMode.ts       门 / 窗工具（上游 Door mode 的超集）
+    createOpeningMode.ts       门 / 窗 / 密门工具（上游 Door mode 的超集）
     createToggleTool.ts        玩家用「开关门窗」工具
     toggleChannel.ts           玩家 → GM 的开关广播
     snap.ts                    「离指针最近的墙」查找
   light/
-    config.ts                  LightConfig（与上游字段一一对应）
+    config.ts                  LightConfig（上游字段 + ambient / colorRadius）
     createLightMenu.ts         添加光源 / 光源设置
     edit-page.ts               光源设置面板（fullfog-light-edit.html）
+    wallIndex.ts               墙体线段网格索引 + 视线查询
+    occlusion.ts               「这盏灯我看得见吗」判定（套件自有）
   overlay.ts                   指示层的显隐生命周期
-  selftest.ts / visual.ts      27 项几何自测 + SVG 证明图
+  selftest.ts / visual.ts      40 项自测 + SVG 证明图
   index.ts                     setup / teardown
 ```
 
@@ -118,21 +133,34 @@ OBR 的迷雾工具鼓励**画重叠的形状**（两个矩形拼出 L 形走廊
 ```ts
 interface Opening {
   id: string;                 // 稳定 id（玩家点击时用它定位，而不是数组下标）
-  kind: "door" | "window";
-  open: boolean;              // true = 通视（墙被挖开）
+  kind: "door" | "window" | "secret";
+  open: boolean;              // true = 生物可以通过（不等于"能看见"，见下）
   polyIndex: number;          // drawingToPolylines() 结果里的第几条折线
   t1: number;                 // 归一化弧长 [0,1]
   t2: number;
 }
 ```
 
-- **门**：默认 `open: false`（关着 = 挡视线），红色；开启后绿色。
-- **窗**：默认 `open: true`（透光 = 不挡视线），青色；关闭（拉上百叶）后灰蓝并挡视线。
+**2026-08-25 语义修订**：`open` 原本表示「通视」，现在表示「**可通行**」。
+是否通视由 `blocksVision()` 单独回答：
 
-墙的推导规则对两者统一：`open === true` ⇒ 该段从墙里挖掉。
+| kind | open = true | open = false |
+| --- | --- | --- |
+| door | 挖开，通视 | 保留墙，挡视线 |
+| secret | 挖开，通视 | 保留墙，挡视线 |
+| **window** | 挖开，通视 | **也挖开，也通视** |
 
-> OBR 的 `Wall` 只影响**视线**，不影响**移动**，所以「能看不能走」在 OBR 里
-> 无法表达。这里把窗定义为「默认常开、可关闭、视觉上与门区分」的开口。
+窗是玻璃：关着一样看得见外面。这是这次改动的核心诉求，也是为什么代码里到处是
+`blocksVision(o)` 而不是 `!o.open`。**「关着的窗爬不过去」这一半 OBR 表达不了**
+（`Wall` 只影响视线，不影响移动），由指示器的颜色 / 图标承载、桌面上约定。
+
+- **门**：默认关，<span>红</span>；开后绿。
+- **密门**：视线上和门完全一样，但**玩家端不生成任何指示器**，且 GM 侧的广播
+  监听器会拒绝玩家对它的开关请求（`applyPlayerOpeningState`）。GM 看到紫色**虚线**。
+  ⚠ 局限：开口数组存在共享场景 metadata 里（OBR 没有仅 GM 可读的存储），
+  玩家翻原始 metadata 理论上能发现密门 —— 但渲染出来的画面里没有任何痕迹，
+  关着的密门产生的墙和「没有门」完全一样。
+- **窗**：默认关（= 玻璃），青色；敞开后蓝绿。两种状态挖出的洞一模一样。
 
 **上游兼容**：`opening/read.ts` 同时接受上游 `rodeo.owlbear.dynamic-fog/doors`
 形状（`{open, start:{index,distance}, end:{...}}`），按折线长度换算成 `t`。
@@ -142,9 +170,13 @@ interface Opening {
 ### 4.2 光源
 
 与上游 `LightConfig` 字段完全一致：
-`attenuationRadius / sourceRadius / falloff / innerAngle / outerAngle / lightType / rotation`。
+`attenuationRadius / sourceRadius / falloff / innerAngle / outerAngle / lightType / rotation`，
+另加两个套件自有字段：`ambient`（豁免遮挡，见 §5.2）和 `colorRadius`（黑暗视觉，见 §5.3）。
 `LightActor` 建原生 `Light`，`SelfLightActor` 给「有角度的 PRIMARY 光源」补一个
 半径 75 的自照明（否则持灯人自己站在锥形光的暗区里）。
+
+`LightActor` / `SelfLightActor` 都**关掉了 VISIBLE 附着继承**，改为自己计算
+`visible = 父 item 可见 && 遮挡判定通过`。OBR 只知道前一半。
 
 ### 4.3 墙体外扩（套件自有功能，非上游）
 
@@ -183,18 +215,74 @@ K）。之所以不用「点选指示器即切换」：本地 item 必须可选�
 - GM → `CONTROL`（在 FOG 之上，自己的迷雾也挡不住）
 - 玩家 → `DRAWING`（在 FOG 之下，未探索区域的门不会透过迷雾泄露地图结构）
 
+## 5.2 光源遮挡（套件自有，2026-08-25）
+
+没有这一层，玩家会看见地牢里**每一支**火把的光晕 —— 包括三个房间外那个正准备
+伏击他们的 NPC 手里那支。规则（按 GM 的要求定）：
+
+> 别人的光源默认不可见；只有当**玩家自己某盏灯**到那盏灯之间的直线**没有被墙挡住**
+> 时，它才可见。
+
+- **只看墙，不看距离** —— 「远处那团火我看不看得见」是视线问题，空旷野地上
+  几百尺外的营火当然看得见。
+- **不传递** —— 走廊里一串火把会随着你逐个获得视线依次点亮，而不是一次全亮。
+- `ambient` 光源（墙上火把、天光）永远可见；GM 永远不被遮挡。
+- ⚠ 直接后果：**身上一盏灯都没有的玩家，除环境光外什么都看不见**。这是规则的
+  正确读法，也正是 `ambient` 存在的理由。
+
+实现：`light/wallIndex.ts` 把 WallActor **真实吐出的**那批折线（含所有已打开的
+门造成的缺口）灌进一个均匀网格，视线查询沿网格 DDA 行进，只测经过的格子。
+描边地图上有几万条线段，线性扫描不可行。索引按墙体签名重建，查询按每次
+token 移动提交跑一次（OBR 拖拽期间不发布 item 变更，所以不在逐帧路径上）。
+
+端点会往内**收一小段**（0.18 格）：墙上的火把 token 就坐在墙上，站在门洞里的
+持灯人两侧都是墙桩，不收的话它们会永远自己挡自己。
+
+## 5.3 黑暗视觉（套件自有，2026-08-25）
+
+`colorRadius` > 0 时，在光源上挂一个 `EFFECT`：`colorRadius` 以内完全透明，
+到 `attenuationRadius` 为止不透明。关键在混合模式 —— Skia 的 **SATURATION**
+取**源的饱和度**加**背景的色相与亮度**，所以往地图上刷一层中性灰就把颜色抽干了，
+亮度和细节一点不动。不用采样、不用二次渲染，一个 shader 搞定。
+
+已知近似（实际都无害）：
+
+- 这个环**不做墙体遮挡**，会隔着墙去色 —— 但墙后本来就在迷雾下，去色后的黑还是黑。
+- 两个黑暗视觉 token 的环叠在一起时，第二个没有颜色可抽，等于空操作。
+
+`EFFECT` item 被 `OBR.scene.items.addItems` 拒收，只能进本地场景 —— 而 dynfog
+的所有子 item 本来就在本地场景里。这也让黑暗视觉天然是**按客户端**的：你的黑白
+只是你的。渲染范围限制为**自己拥有的 token**；GM 拥有场景里几乎所有 NPC，照章
+办事会把大半张地图变成黑白，所以 GM 默认豁免，可用 `fogDarkvisionForGM` 打开预览。
+
 ## 6. 设置项（新增）
 
 | 位置 | key | 默认 | 说明 |
 | --- | --- | --- | --- |
-| 套件场景状态 | `fogPlayerDoors` | `true` | 玩家可见门窗指示器并可自行开关 |
+| 套件场景状态 | `fogPlayerDoors` | `true` | 玩家可见门窗指示器并可自行开关（**密门不受此开关影响，永远不可见**） |
 | 套件场景状态 | `fogDoorOverlayAlways` | `false` | GM 不选迷雾工具时也常显门窗指示器 |
-| **OBR 场景本身** | `scene.fog.filled` | — | 设置面板里新加的「整张地图铺满迷雾」直通开关。**没打开它，墙和光源不会有任何可见效果** |
+| 套件场景状态 | `fogLightOcclusion` | `true` | 光源遮挡（§5.2） |
+| 套件场景状态 | `fogDarkvisionForGM` | `false` | GM 端也应用黑暗视觉去色环 |
+| 每盏灯 metadata | `ambient` | `false` | 该光源豁免遮挡，对所有人永远可见 |
+| 每盏灯 metadata | `colorRadius` | `0` | 黑暗视觉彩色半径，0 = 关 |
+| **OBR 场景本身** | `scene.fog.filled` | — | 设置面板里的「整张地图铺满迷雾」直通开关。**没打开它，墙和光源不会有任何可见效果** |
+
+### 6.1 模块拆分（2026-08-25）
+
+原来的单一模块 `fullFog` 拆成两个可独立开关的模块：
+
+| 模块 id | 内容 | 关掉的后果 |
+| --- | --- | --- |
+| `fogEditor` | 右键地图 →「编辑地图迷雾」全屏描边编辑器，没有任何常驻逻辑 | 已描好的迷雾照常工作（墙由下面那个模块生成） |
+| `dynamicFog` | dynfog 引擎全部：墙推导、门 / 密门 / 窗、光源、遮挡、黑暗视觉 | **迷雾不再挡视线**（退回成纯涂黑） |
+
+`fullFog` 这个 id 保留在类型与状态结构里但已退役（恒为 `false`、`background.ts`
+不再注册），老房间存的 `fullFog: false` 会被一次性迁移成两个新 id 同时关闭。
 
 ## 7. 验证
 
 ```bash
-node tools/dynfog-selftest.mjs      # 27 项几何自测
+node tools/dynfog-selftest.mjs      # 40 项自测（几何 + 视线）
 node tools/dynfog-visual.mjs docs/dynfog-walls.svg   # 生成证明图
 npx tsc --noEmit                    # 全量类型检查
 ```
@@ -204,4 +292,6 @@ npx tsc --noEmit                    # 全量类型检查
 会生成的那些线段 —— 图上门没开，游戏里就没开。
 
 覆盖范围：轮廓推导（矩形 / 圆 / 三角 / 六边 / Path / Line / Curve）、弧长寻址、
-开口切分与合并、跨图形裁剪、墙体外扩后的顶点对应与门位置重映射、上游元数据转换。
+开口切分与合并、跨图形裁剪、墙体外扩后的顶点对应与门位置重映射、上游元数据转换、
+开口语义表（kind × open → 挡不挡视线 / 玩家可不可见）、视线索引（墙阻断、门洞
+放行、墙上光源的自遮挡与端点收缩、大规模网格行进）。

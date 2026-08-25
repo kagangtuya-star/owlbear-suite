@@ -8,6 +8,15 @@
 // GM-only pieces (the fog-tool modes and the light context menu) are
 // gated on role; the toggle tool is registered for players too when the
 // GM allows it.
+//
+// Three tiers, easy to get wrong:
+//   every channel   walls, lights, self lights — scene CONTENT. Missing
+//                   any of these makes a lit scene unviewable.
+//   authoring only  tools, context menus, indicators, the player toggle
+//                   channel, occlusion and darkvision — things a GM
+//                   configures, and a channel with no settings tab for
+//                   them should not silently get them.
+//   GM only         the fog-tool modes and the light context menu.
 
 import OBR from "@owlbear-rodeo/sdk";
 import { Reconciler } from "./reconcile/Reconciler";
@@ -144,9 +153,16 @@ export async function setupDynfog(options: DynfogOptions): Promise<void> {
   reconciler = new Reconciler();
   reconciler.register(new OpeningReactor(reconciler));
   reconciler.register(new WallReactor(reconciler));
+  // Lights RENDER on every channel, for the same reason walls do: a
+  // scene with fog filled and no lights is a black screen for every
+  // player. Gating light rendering behind `authoring` would leave a
+  // stable-channel player blind in any scene a dev-channel GM lit.
+  reconciler.register(new LightReactor(reconciler));
+  reconciler.register(new SelfLightReactor(reconciler));
   if (authoring) {
-    reconciler.register(new LightReactor(reconciler));
-    reconciler.register(new SelfLightReactor(reconciler));
+    // These two CHANGE what light does rather than provide it, so they
+    // stay on the authoring side: a channel without the settings tab to
+    // configure them should get plain upstream behaviour.
     reconciler.register(new DarkvisionReactor(reconciler));
     // Occlusion runs after every reactor has settled, so it reads the
     // walls and the light positions from the SAME pass.

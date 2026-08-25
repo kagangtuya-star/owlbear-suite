@@ -22,13 +22,16 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 - **`fullFog/dynfog` — the fog module's wall / door / light stack rebuilt as a functional port of [owlbear-rodeo/dynamic-fog](https://github.com/owlbear-rodeo/dynamic-fog).** Design notes and the deliberate deviations are in [`docs/DYNAMIC_FOG_PARITY.md`](docs/DYNAMIC_FOG_PARITY.md).
   - **Walls now come from every FOG-layer drawing.** Shapes drawn with Owlbear's own fog tool (rectangle / circle / triangle / hexagon / freehand curve / line / path) all become native per-client `Wall` items, alongside the fog editor's traced outline. Previously only the editor's outline produced walls, so anything drawn by hand blocked nothing.
   - **Door tool (fog toolbar, shortcut `O`).** Drag along any wall to carve a door; click to open/close, alt-click or double-click to delete. It snaps to any fog wall rather than requiring the pointer to be over the shape itself, which is what makes it work on the traced outline (that Path is `disableHit`, so it can never be a pointer target).
-  - **Window tool (shortcut `I`).** Same gesture, but a window defaults to see-through and can be shuttered — cyan when open, grey-blue when closed.
+  - **Window tool (shortcut `I`).** Same gesture. A window is see-through in **both** states — cyan when glazed, aqua when swung open — and its toggle says whether a creature can *pass*, not whether you can see. Owlbear walls do not affect movement, so that half is carried by the indicator and honoured at the table.
+  - **Secret door tool (shortcut `U`).** Vision-identical to a door, but no indicator is ever built on a player's client and the GM re-checks every incoming toggle request, so a hand-rolled broadcast can't work one either. Dashed purple for the GM.
   - **Line tool.** Drag a straight fog line, so a bare wall segment can be drawn to hang a door on.
   - **Players can work the doors.** Indicators render for players on the `DRAWING` layer, below the fog, so undiscovered doors don't leak the floor plan; a 「开关门窗」 toolbar tool (shortcut `K`) flips one. FOG-layer items are GM-writable only, so the click is broadcast and applied by the GM, who owns the permission gate. Governed by the new `fogPlayerDoors` scene setting (default on).
   - **Lights reach upstream parity.** Range in scene units, full/cone angle, hard/soft edge, PRIMARY/SECONDARY type, cone rotation, and the small self-light that stops a cone-carrier standing in their own dark spot. The old panel had only radius / core radius / falloff.
   - **A door on a shared wall opens both overlapping fog shapes**, matching upstream's world-space door subtraction. Without it a door between two overlapping rooms looks open while the second shape's wall still blocks vision.
-  - **Settings → 地图迷雾** gains the two toggles above plus a passthrough for the OBR scene's own **"整张地图铺满迷雾"**. With scene fog unfilled, walls and lights have no visible effect at all — the most likely explanation for "lighting ignores walls".
-  - No new dependencies: upstream's 6.8 MB CanvasKit WASM is replaced by a pure-TS geometry core, since the background iframe loads on every client. `tools/dynfog-selftest.mjs` runs 27 geometry checks under node; `tools/dynfog-visual.mjs` renders the engine's actual wall output to [`docs/dynfog-walls.svg`](docs/dynfog-walls.svg).
+  - **Light occlusion (`fogLightOcclusion`, default on).** A player only sees a light they don't own when a straight line from one of their own lights reaches it without crossing a wall. Walls only — distance is not part of it — and not transitive, so a row of torches lights up one at a time as line of sight is gained. Lights flagged **Ambient** in Light Settings are exempt, for fixed room lighting; the GM is never occluded. A player carrying no light of their own therefore sees only ambient lights, which is the intended reading of the rule. Backed by a new uniform-grid segment index (`dynfog/light/wallIndex.ts`) over the walls the engine actually emits, so a traced map with tens of thousands of segments still answers in microseconds.
+  - **Darkvision (per-light `colorRadius`).** Colour survives inside the radius; from there out to the light's own edge the view renders in greyscale. Implemented as a POST_PROCESS `EFFECT` ring whose SKSL paints neutral grey under Skia's SATURATION blend, which drains chroma while leaving every brightness and detail intact. Applies only to tokens the viewer owns — an ally's darkvision has no business greying out your screen — with `fogDarkvisionForGM` for previewing.
+  - **Settings → 动态迷雾** gains the toggles above plus a passthrough for the OBR scene's own **"整张地图铺满迷雾"**. With scene fog unfilled, walls and lights have no visible effect at all — the most likely explanation for "lighting ignores walls".
+  - No new dependencies: upstream's 6.8 MB CanvasKit WASM is replaced by a pure-TS geometry core, since the background iframe loads on every client. `tools/dynfog-selftest.mjs` runs 40 checks under node (geometry plus the line-of-sight index); `tools/dynfog-visual.mjs` renders the engine's actual wall output to [`docs/dynfog-walls.svg`](docs/dynfog-walls.svg).
 
 ### Fixed
 
@@ -36,9 +39,14 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 - **`wallExpandPx` is saved with its sign.** It was persisted through `Math.max(0, …)`, so the negative half of the slider (blocking wall pushed *into* the wall material) silently did nothing and disagreed with the editor's magenta wall preview.
 - **Wall-expand works on independent saves.** The stored value is in image pixels, which can only be converted using the map image's grid dpi — unreachable for a Path with no `attachedTo`. Saves now also record the pre-converted map-local value.
 
+### Changed
+
+- **`fullFog` split into two independently switchable modules: `fogEditor` and `dynamicFog`.** They answer different questions — the editor is a content-authoring convenience with no runtime, while the engine is what makes fog block vision at all — and a table that hand-draws its fog should not have to keep the tracer to get walls. Turning the editor off does not invalidate fog it already traced. The settings page loses the several-hundred-word editor manual that used to sit above the dynamic-fog options; the detail now lives in `docs/` and in the editor's own hover text. `fullFog` remains in the state shape as a retired id (pinned off, registered nowhere); a room that had deliberately stored `fullFog: false` migrates once to both new ids off.
+
 ### Removed
 
 - `src/modules/fullFog/door/` and `src/modules/fullFog/light/`, superseded by `dynfog/`. Openings and light metadata keep their existing keys, so scenes carry over.
+- `public/fullfog-window-closed.svg` (the shuttered-window billboard). A shut window is glazed, not boarded up, so it now uses the mullioned-pane art and the new `fullfog-window-open.svg` covers the open state.
 
 ### Changed
 

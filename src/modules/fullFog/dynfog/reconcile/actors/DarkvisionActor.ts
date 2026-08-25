@@ -23,7 +23,12 @@
 // child lives anyway. That also makes darkvision correctly per-client:
 // your greyscale is yours.
 
-import { buildEffect, type Effect, type Item } from "@owlbear-rodeo/sdk";
+import {
+  buildEffect,
+  type Effect,
+  type Item,
+  type Vector2,
+} from "@owlbear-rodeo/sdk";
 import { Actor } from "../Actor";
 import type { Reconciler } from "../Reconciler";
 import { LIGHT_KEY } from "../../ids";
@@ -140,6 +145,27 @@ export class DarkvisionActor extends Actor {
     this.effect = item.id;
     this.built = geometry;
     this.reconciler.patcher.addItems(item);
+    // Owlbear is documented in two directions on what it does to an
+    // attached item's position at add time — `initiative/visualEffects`
+    // relies on it snapping to the parent, `bubbles` relies on it
+    // keeping the absolute value it was given. The Patcher flushes adds
+    // before updates, so re-stating the position here settles it either
+    // way, and it costs one field write per rebuild.
+    this.reconciler.patcher.updateItems([
+      item.id,
+      (existing) => {
+        existing.position = this.topLeft(parent, geometry);
+      },
+    ]);
+  }
+
+  /** The effect box is a 2R square centred on the token, and `position`
+   *  is its top-left corner in scene units. */
+  private topLeft(parent: Item, geometry: Geometry): Vector2 {
+    return {
+      x: parent.position.x - geometry.outer,
+      y: parent.position.y - geometry.outer,
+    };
   }
 
   private build(parent: Item, geometry: Geometry): Effect {
@@ -156,12 +182,7 @@ export class DarkvisionActor extends Actor {
         { name: "rOuter", value: geometry.outer },
         { name: "feather", value: geometry.feather },
       ])
-      // `position` is the box's TOP-LEFT in scene units, so centring on
-      // the token means backing off by the radius on both axes.
-      .position({
-        x: parent.position.x - geometry.outer,
-        y: parent.position.y - geometry.outer,
-      })
+      .position(this.topLeft(parent, geometry))
       .attachedTo(parent.id)
       // Above the fog, below the CONTROL layer's UI, so it drains
       // colour from the map, the tokens and the fog alike but never

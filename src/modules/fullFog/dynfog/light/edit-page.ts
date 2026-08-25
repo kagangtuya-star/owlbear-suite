@@ -4,7 +4,9 @@
 // Control set matches upstream dynamic-fog's Menu.tsx one-for-one
 // (Range / Angle / Edge / Type / Rotate / Remove), plus the two extra
 // sliders the suite's older panel had (core radius and the raw falloff
-// value) so nothing is lost in the swap.
+// value) so nothing is lost in the swap, plus two fields that are ours
+// alone: the darkvision colour radius and the ambient flag. See
+// `../light/config.ts` for what those two mean.
 //
 // The target is the current selection — that's the token whose context
 // menu opened this embed — re-resolved on selection change so the panel
@@ -48,6 +50,9 @@ const sourceEl = document.getElementById("source") as HTMLInputElement;
 const sourceValEl = document.getElementById("source-val") as HTMLSpanElement;
 const falloffEl = document.getElementById("falloff") as HTMLInputElement;
 const falloffValEl = document.getElementById("falloff-val") as HTMLSpanElement;
+const colorRadiusEl = document.getElementById("colorRadius") as HTMLInputElement;
+const colorUnitEl = document.getElementById("color-unit") as HTMLSpanElement;
+const ambientEl = document.getElementById("ambient") as HTMLDivElement;
 const rotateBtn = document.getElementById("btn-rotate") as HTMLButtonElement;
 const removeBtn = document.getElementById("btn-remove") as HTMLButtonElement;
 
@@ -106,6 +111,10 @@ function paint(config: Required<LightConfig>): void {
   sourceValEl.textContent = `${Math.round(config.sourceRadius)} px`;
   falloffEl.value = String(config.falloff);
   falloffValEl.textContent = config.falloff.toFixed(2);
+  colorRadiusEl.value =
+    config.colorRadius > 0 ? pxToUnits(config.colorRadius) : "0";
+  colorUnitEl.textContent = gridScale?.parsed.unit ?? "px";
+  setSegment(ambientEl, config.ambient ? "ON" : "OFF");
   rotateBtn.classList.toggle("hidden", !isCone);
   syncing = false;
 }
@@ -258,6 +267,50 @@ falloffEl.addEventListener("input", () => {
   scheduleSliderWrite({ falloff: value });
 });
 
+/** Darkvision radius. 0 (or anything unparseable) means off, which
+ *  is written as an explicit 0 rather than deleted, so a multi-select
+ *  clears every light instead of leaving some on. */
+function commitColorRadius(): void {
+  if (syncing) return;
+  const text = colorRadiusEl.value.trim();
+  const parsed = parseFloat(text);
+  if (text === "" || (Number.isFinite(parsed) && parsed <= 0)) {
+    colorRadiusEl.value = "0";
+    void patch({ colorRadius: 0 });
+    return;
+  }
+  const px = unitsToPx(text);
+  if (!Number.isFinite(px) || px <= 0) {
+    if (values) {
+      colorRadiusEl.value =
+        values.colorRadius > 0 ? pxToUnits(values.colorRadius) : "0";
+    }
+    return;
+  }
+  void patch({ colorRadius: px });
+}
+
+colorRadiusEl.addEventListener("blur", commitColorRadius);
+colorRadiusEl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    commitColorRadius();
+    (event.target as HTMLElement).blur();
+  } else if (event.key === "Escape") {
+    if (values) {
+      colorRadiusEl.value =
+        values.colorRadius > 0 ? pxToUnits(values.colorRadius) : "0";
+    }
+    (event.target as HTMLElement).blur();
+  }
+});
+
+ambientEl.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest("button");
+  if (!button?.dataset.value) return;
+  setSegment(ambientEl, button.dataset.value);
+  void patch({ ambient: button.dataset.value === "ON" });
+});
+
 rotateBtn.addEventListener("click", () => {
   if (!values) return;
   const rotation = (values.rotation + 90) % 360;
@@ -290,7 +343,12 @@ OBR.onReady(async () => {
     OBR.scene.items.onChange(() => {
       // Don't fight the user mid-edit: skip the repaint while a field
       // has focus.
-      if (document.activeElement === rangeEl) return;
+      if (
+        document.activeElement === rangeEl ||
+        document.activeElement === colorRadiusEl
+      ) {
+        return;
+      }
       void load();
     });
   } catch {}

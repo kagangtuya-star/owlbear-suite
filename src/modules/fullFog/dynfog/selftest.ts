@@ -23,6 +23,7 @@ import {
 import { bboxOf, cutRangesForPolyline, type Cut } from "./geom/cut";
 import { deriveWallPolylines, expandContours } from "./geom/wallGeometry";
 import { readOpenings } from "./opening/read";
+import { WallIndex } from "./light/wallIndex";
 import {
   blocksVision,
   playerVisible,
@@ -609,6 +610,108 @@ export function runDynfogSelfTest(): TestResult[] {
         near(openings[0].t2, 0.2, 1e-9) &&
         openings[0].open === true,
       JSON.stringify(openings),
+    );
+  }
+
+  // --- line of sight (light occlusion) --------------------------------------
+
+  {
+    // One wall down the middle of an otherwise open field.
+    const wall = [
+      { x: 100, y: -1000 },
+      { x: 100, y: 1000 },
+    ];
+    const index = WallIndex.build([wall]);
+    check(
+      "a wall between two lights blocks the sight line",
+      index.blocked({ x: 0, y: 0 }, { x: 200, y: 0 }),
+      `segments=${index.size}`,
+    );
+    check(
+      "two lights on the same side of a wall can see each other",
+      !index.blocked({ x: 0, y: 0 }, { x: 90, y: 400 }),
+      "",
+    );
+    check(
+      "distance alone never blocks — only walls do",
+      !index.blocked({ x: 0, y: 0 }, { x: -50_000, y: 30_000 }),
+      "",
+    );
+  }
+
+  {
+    // The same wall, but with a doorway cut out of it between y=-40 and
+    // y=40 — exactly what `deriveWallPolylines` emits for an open door.
+    const index = WallIndex.build([
+      [
+        { x: 100, y: -1000 },
+        { x: 100, y: -40 },
+      ],
+      [
+        { x: 100, y: 40 },
+        { x: 100, y: 1000 },
+      ],
+    ]);
+    check(
+      "an open doorway lets the sight line through",
+      !index.blocked({ x: 0, y: 0 }, { x: 200, y: 0 }),
+      "",
+    );
+    check(
+      "the wall either side of the doorway still blocks",
+      index.blocked({ x: 0, y: 300 }, { x: 200, y: 300 }),
+      "",
+    );
+  }
+
+  {
+    // A sconce token sits ON the wall it hangs from. Without the trim
+    // it would occlude itself forever and never light anything.
+    const index = WallIndex.build([
+      [
+        { x: 100, y: -1000 },
+        { x: 100, y: 1000 },
+      ],
+    ]);
+    const onWall = { x: 100, y: 0 };
+    check(
+      "a light sitting on a wall self-occludes without a trim",
+      index.blocked({ x: 40, y: 0 }, onWall, 0),
+      "",
+    );
+    check(
+      "…and does not once the endpoints are trimmed",
+      !index.blocked({ x: 40, y: 0 }, onWall, 30),
+      "",
+    );
+    check(
+      "the trim does not reopen a wall crossed mid-line",
+      index.blocked({ x: 0, y: 0 }, { x: 400, y: 0 }, 30),
+      "",
+    );
+  }
+
+  {
+    // Many segments spread over a wide area: exercises the grid march
+    // rather than the single-cell fast path.
+    const polylines: { x: number; y: number }[][] = [];
+    for (let i = 0; i < 400; i++) {
+      const x = i * 25;
+      polylines.push([
+        { x, y: 0 },
+        { x, y: 20 },
+      ]);
+    }
+    const index = WallIndex.build(polylines);
+    check(
+      "grid march finds a hit far from the query origin",
+      index.blocked({ x: 5000, y: 10 }, { x: 5040, y: 10 }),
+      `segments=${index.size}`,
+    );
+    check(
+      "grid march reports clear when the line runs past every segment",
+      !index.blocked({ x: -100, y: 500 }, { x: 12_000, y: 500 }),
+      "",
     );
   }
 

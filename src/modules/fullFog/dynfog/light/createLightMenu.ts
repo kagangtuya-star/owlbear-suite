@@ -89,7 +89,7 @@ export async function createLightMenu(): Promise<void> {
       url: SETTINGS_URL,
       // Upstream uses 194 for its four controls; we also show the core
       // radius + falloff sliders, so the panel is taller.
-      height: 268,
+      height: 396,
     },
   });
 }

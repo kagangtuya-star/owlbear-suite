@@ -25,7 +25,7 @@
         display: inline-flex; align-items: center; justify-content: center;
         background: #252934; color: #b9bfcc;
         border: 1px solid #3b4150; border-radius: 4px;
-        cursor: pointer;
+        cursor: pointer; font: inherit; font-size: 12px;
       }
       .seg button:hover { background: #2e3340; }
       .seg button[aria-pressed="true"] {
@@ -50,6 +50,10 @@
       }
       .slider .val { color: #f5a623; font-variant-numeric: tabular-nums; font-weight: 600; }
       input[type=range] { width: 100%; accent-color: #f5a623; margin: 0; }
+      .hint {
+        font-size: 10.5px; line-height: 1.5; color: #7d8494;
+        margin: 6px 0 0;
+      }
       .actions { display: flex; gap: 8px; margin-top: 10px; }
       .actions button {
         flex: 1; height: 30px;
@@ -136,6 +140,36 @@
         </div>
         <input type="range" id="falloff" min="0" max="3" step="0.05" value="0.2" />
       </div>
+
+      <hr />
+
+      <div class="grid">
+        <div class="field">
+          <span class="lbl" data-en="Darkvision (colour radius)">黑暗视觉 · 彩色半径</span>
+          <div class="num">
+            <input id="colorRadius" type="text" inputmode="decimal" autocomplete="off" value="0" />
+            <span class="unit" id="color-unit">ft</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="lbl" data-en="Ambient">环境光</span>
+          <div class="seg" id="ambient">
+            <button type="button" data-value="OFF"
+                    title="参与光源遮挡：玩家看不见别人的这盏灯，除非有无墙视线"
+                    data-en-title="Occluded — other players only see this light with a wall-free sight line">
+              <span data-en="Occluded">遮挡</span>
+            </button>
+            <button type="button" data-value="ON"
+                    title="环境光：对所有人永远可见，用于墙上火把 / 天光这类固定照明"
+                    data-en-title="Ambient — always visible to everyone; for fixed lighting like sconces or daylight">
+              <span data-en="Ambient">环境</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <p class="hint" data-en="Colour radius 0 turns darkvision off. Above 0, everything this light reaches beyond that radius renders in greyscale — only on clients that own this token.">彩色半径填 0 即关闭黑暗视觉。大于 0 时，这盏灯照到的、半径以外的部分会变成黑白 —— 只在拥有该 token 的客户端上生效。</p>
 
       <div class="actions">
         <button id="btn-rotate" class="hidden" type="button">
