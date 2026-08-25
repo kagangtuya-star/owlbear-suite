@@ -1,6 +1,7 @@
 import OBR from "@owlbear-rodeo/sdk";
 import { getLocalLang } from "../state";
 import { assetUrl } from "../asset-base";
+import { interruptInFlightDrag } from "../utils/interruptDrag";
 
 // "Time Stop" / 时停模式 module — migrated from time-stop plugin.
 //
@@ -112,43 +113,6 @@ async function hideOverlay() {
   overlayCgUrl = null;
 }
 
-/**
- * 2026-05-12 — interrupt any in-flight pointer drag on the current
- * client. `player.deselect()` alone doesn't tear down an active
- * drag (OBR's drag handler is independent of selection state), so
- * a player who was MID-DRAG when time stop / focus camera fired
- * would happily keep dragging right through the cinematic.
- *
- * Recipe: briefly toggle `locked: true` on the currently-selected
- * items (which DOES break OBR's drag handler), then deselect, then
- * restore unlock after a short delay. Players have write permission
- * on tokens they own (createdUserId match), which covers every
- * token they could be dragging in the first place.
- *
- * Safe to call on GM too — it's a no-op if nothing is selected and
- * any in-flight drag will be interrupted symmetrically.
- */
-async function interruptInFlightDrag(): Promise<void> {
-  try {
-    const sel = await OBR.player.getSelection();
-    if (!sel || sel.length === 0) return;
-    const ids = [...sel];
-    try {
-      await OBR.scene.items.updateItems(ids, (drafts) => {
-        for (const d of drafts) d.locked = true;
-      });
-    } catch { /* no write perms — skip lock */ }
-    try { await OBR.player.deselect(); } catch {}
-    // Unlock after the drag has had time to die. 250 ms is enough
-    // for OBR's drag system to register the lock + cancel the
-    // gesture; longer would visibly delay the player's next click.
-    setTimeout(() => {
-      OBR.scene.items.updateItems(ids, (drafts) => {
-        for (const d of drafts) d.locked = false;
-      }).catch(() => {});
-    }, 250);
-  } catch {}
-}
 
 // Per user feedback (2026-04-30): time stop should ONLY block player
 // input via the full-screen overlay + force-deselect. We no longer

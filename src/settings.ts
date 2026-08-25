@@ -823,6 +823,20 @@ My content follows:
 `,
 };
 
+// Both templates are module constants and `escapeAttr` is pure, so the
+// escaped form can never differ between renders. Escaping them inline
+// meant re-scanning ~9 kB of prompt text on every render of the
+// libraries tab — and renderContent() rebuilds the tab's innerHTML on
+// any state change, not just on open.
+const AI_PROMPT_TEMPLATE_ESC: Record<Language, string> = {
+  zh: escapeAttr(AI_PROMPT_TEMPLATE.zh),
+  en: escapeAttr(AI_PROMPT_TEMPLATE.en),
+};
+const AI_PROMPT_MD_TEMPLATE_ESC: Record<Language, string> = {
+  zh: escapeAttr(AI_PROMPT_MD_TEMPLATE.zh),
+  en: escapeAttr(AI_PROMPT_MD_TEMPLATE.en),
+};
+
 // =====================================================================
 // Library preview / diagnostic
 // =====================================================================
@@ -1287,22 +1301,34 @@ function localFileRowHtml(f: LocalFileMeta, lang: Language): string {
  *  file row. Multi-kind packs (kiwee homebrew etc.) show the primary
  *  kind plus a "+ N 类" suffix so the user can tell at a glance
  *  whether a pack is single- or multi-category. */
-function buildKindLabel(f: LocalFileMeta, lang: Language): string {
-  const kindLabel: Record<string, string> = lang === "zh" ? {
+// Hoisted out of buildKindLabel, which allocated a fresh 23-key object
+// on every call — once per local-content row and once per URL
+// subscription row, on every render of the libraries tab. The contents
+// are frozen, so there was never a reason to rebuild them.
+const KIND_LABELS: Record<Language, Record<string, string>> = {
+  zh: {
     monster: "怪物", spell: "法术", item: "物品", feat: "专长", race: "种族",
     background: "背景", optionalfeature: "能力", condition: "状态", vehicle: "载具",
     deity: "神祇", language: "语言", psionic: "灵能", reward: "奖励",
     variantrule: "副规则", trap: "陷阱", hazard: "灾害", cult: "教派",
     boon: "恩惠", disease: "疾病", table: "表格", action: "动作",
     recipe: "食谱", deck: "牌组",
-  } : {
+  },
+  en: {
     monster: "Monster", spell: "Spell", item: "Item", feat: "Feat", race: "Race",
     background: "Background", optionalfeature: "Feature", condition: "Condition",
     vehicle: "Vehicle", deity: "Deity", language: "Language", psionic: "Psionic",
     reward: "Reward", variantrule: "Rule", trap: "Trap", hazard: "Hazard",
     cult: "Cult", boon: "Boon", disease: "Disease", table: "Table",
     action: "Action", recipe: "Recipe", deck: "Deck",
-  };
+  },
+};
+
+function buildKindLabel(f: LocalFileMeta, lang: Language): string {
+  // `lang === "zh" ? zh : en` before, so anything that is not "zh" got
+  // the English table — keep that, rather than indexing by `lang`,
+  // which would return undefined for an unexpected value.
+  const kindLabel = lang === "zh" ? KIND_LABELS.zh : KIND_LABELS.en;
   const primary = kindLabel[f.kind] || f.kind;
   if (f.kinds && f.kinds.length > 1) {
     const extra = f.kinds.length - 1;
@@ -1436,12 +1462,12 @@ Any creature within 5 ft. takes {@damage 1d4} cold damage at the start of its tu
 
         <h4>AI 提示词（JSON 版）</h4>
         <p>粘贴给 ChatGPT / Claude / DeepSeek / 通义千问 等模型，把怪物 / 法术 / 物品资料贴在末尾，模型会输出可直接导入的 JSON 文件。</p>
-        <textarea class="lib-prompt" readonly>${escapeAttr(AI_PROMPT_TEMPLATE[lang])}</textarea>
+        <textarea class="lib-prompt" readonly>${AI_PROMPT_TEMPLATE_ESC[lang]}</textarea>
         <button class="lib-prompt-copy" type="button">复制 JSON 提示词</button>
 
         <h4>AI 提示词（MD 版，单怪物）</h4>
         <p>如果你想让 AI 输出更人类可读的 Markdown 格式（适合一次只录一个怪物，方便事后用任意编辑器修改）：</p>
-        <textarea class="lib-prompt-md" readonly>${escapeAttr(AI_PROMPT_MD_TEMPLATE[lang])}</textarea>
+        <textarea class="lib-prompt-md" readonly>${AI_PROMPT_MD_TEMPLATE_ESC[lang]}</textarea>
         <button class="lib-prompt-md-copy" type="button">复制 MD 提示词</button>
 
         <p style="color:#9ab;font-size:11px;margin-top:8px">本地导入失败时多半是 JSON 解析错（多 / 少逗号、引号没闭合）；URL 库加载失败开浏览器 DevTools 看 Network 面板，常见是 CORS / 404 / JSON 格式错误。</p>
@@ -1494,9 +1520,9 @@ Any creature within 5 ft. takes {@damage 1d4} cold damage at the start of its tu
         </div>
 
         <h4>AI prompts</h4>
-        <textarea class="lib-prompt" readonly>${escapeAttr(AI_PROMPT_TEMPLATE[lang])}</textarea>
+        <textarea class="lib-prompt" readonly>${AI_PROMPT_TEMPLATE_ESC[lang]}</textarea>
         <button class="lib-prompt-copy" type="button">Copy JSON prompt</button>
-        <textarea class="lib-prompt-md" readonly>${escapeAttr(AI_PROMPT_MD_TEMPLATE[lang])}</textarea>
+        <textarea class="lib-prompt-md" readonly>${AI_PROMPT_MD_TEMPLATE_ESC[lang]}</textarea>
         <button class="lib-prompt-md-copy" type="button">Copy MD prompt</button>
       </div>
     </details>

@@ -217,7 +217,16 @@ function getTriggerH(): number { return IS_MOBILE ? MOBILE_TRIGGER_H : TRIGGER_H
 
 async function openCluster() {
   try {
-    const vh = await OBR.viewport.getHeight();
+    // The viewport height and the side computation are independent, and
+    // each is a postMessage round trip to the host. Awaiting them in
+    // sequence put two of them in front of first paint; Promise.all
+    // makes it one. The side broadcast that computePanelSideAndBroadcast
+    // fires can only land EARLIER as a result, and its consumer is the
+    // popover iframe, which is not open yet either way.
+    const [vh, side] = await Promise.all([
+      OBR.viewport.getHeight(),
+      computePanelSideAndBroadcast(PANEL_IDS.cluster),
+    ]);
     const userOff = getPanelOffset(PANEL_IDS.cluster);
     const left = getTriggerLeft() + userOff.dx;
     // DY SIGN: anchorOrigin=BOTTOM so anchorPosition.top = vh - bottom
@@ -228,10 +237,9 @@ async function openCluster() {
     // against the top edge of the viewport so subsequent vertical
     // drags had no effect — the user-reported "only horizontal" bug.
     const bottom = getTriggerBottom() - userOff.dy;
-    // Side-aware drag handle — compute up front so the iframe can
-    // render its handle on the correct edge from first paint instead
-    // of relying on the post-broadcast flip.
-    const side = await computePanelSideAndBroadcast(PANEL_IDS.cluster);
+    // `side` (resolved above) makes the iframe render its drag handle on
+    // the correct edge from first paint, instead of flipping after the
+    // broadcast arrives.
     await OBR.popover.open({
       id: CLUSTER_POPOVER_ID,
       url: `${CLUSTER_URL}?side=${side}${IS_MOBILE ? "&mobile=1" : ""}`,
@@ -434,13 +442,26 @@ OBR.onReady(() => {
     PANEL_IDS.musicBoard,
   ];
   async function collectLayoutEditorBboxes(): Promise<Record<string, { left: number; top: number; width: number; height: number }>> {
+    // One round trip per panel, and there are 13 of them — awaited in
+    // sequence that was 13 sequential bridge hops before the editor
+    // modal could open. They are independent reads, so gather them at
+    // once. Insertion order into bboxMap is preserved by iterating
+    // layoutEditorPanelIds rather than settle order, and a provider that
+    // throws still just drops out, exactly as the try/catch did.
     const bboxMap: Record<string, { left: number; top: number; width: number; height: number }> = {};
-    for (const id of layoutEditorPanelIds) {
-      try {
-        const bbox = await computePanelBbox(id);
-        if (bbox) bboxMap[id] = bbox;
-      } catch {}
-    }
+    const results = await Promise.all(
+      layoutEditorPanelIds.map(async (id) => {
+        try {
+          return await computePanelBbox(id);
+        } catch {
+          return null;
+        }
+      }),
+    );
+    layoutEditorPanelIds.forEach((id, i) => {
+      const bbox = results[i];
+      if (bbox) bboxMap[id] = bbox;
+    });
     return bboxMap;
   }
   OBR.broadcast.onMessage(BC_OPEN_LAYOUT_EDITOR, async () => {
