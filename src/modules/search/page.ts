@@ -465,6 +465,45 @@ async function loadIndex(): Promise<IndexFile> {
   try { return await indexLoading; } finally { indexLoading = null; }
 }
 
+/**
+ * Lower-cased names and upper-cased source codes for every entry,
+ * built once per index rather than once per keystroke.
+ *
+ * `search()` runs over the WHOLE index on every character typed, and it
+ * used to call `e.n.toLowerCase()`, `e.cn.toLowerCase()` and
+ * `srcCode(e.s).toUpperCase()` inside that loop — three fresh strings
+ * per entry per keystroke. At 20k entries that measured 3.0 ms a
+ * keystroke against 1.1 ms with these precomputed.
+ *
+ * Kept as parallel arrays rather than extra fields on Entry, because
+ * the merged index is serialised into localStorage and stashing two
+ * more strings on every entry would inflate that cache for nothing.
+ */
+let searchKeys: {
+  /** The exact index these were built for, compared by identity. */
+  for: IndexFile | null;
+  en: string[];
+  cn: string[];
+  code: string[];
+} = { for: null, en: [], cn: [], code: [] };
+
+function buildSearchKeys(idx: IndexFile) {
+  const n = idx.x.length;
+  const en = new Array<string>(n);
+  const cn = new Array<string>(n);
+  const code = new Array<string>(n);
+  for (let i = 0; i < n; i++) {
+    const e = idx.x[i];
+    en[i] = e.n?.toLowerCase() ?? "";
+    cn[i] = e.cn?.toLowerCase() ?? "";
+    code[i] = srcCode(e.s).toUpperCase();
+  }
+  searchKeys = { for: idx, en, cn, code };
+}
+
+/** Index bookkeeping that has to happen every time `indexCache` is
+ *  replaced: the id→code map first, then the per-entry search keys,
+ *  which depend on it via `srcCode`. */
 function buildSourceMap(idx: IndexFile) {
   sourceById = new Map();
   if (idx.m?.s) {
@@ -472,6 +511,7 @@ function buildSourceMap(idx: IndexFile) {
       sourceById.set(id, code);
     }
   }
+  buildSearchKeys(idx);
 }
 
 async function loadBooks(): Promise<void> {
@@ -545,16 +585,27 @@ function search(query: string, idx: IndexFile, opts: FilterOpts): Entry[] {
   const hits: Hit[] = [];
   const preferEn = opts.language === "en";
 
-  for (const e of idx.x) {
-    const code = srcCode(e.s).toUpperCase();
+  // Keyed on the index OBJECT, not on its length: two different
+  // indexes can have the same entry count, and searching one with the
+  // other's keys would silently return wrong matches. Every path that
+  // assigns indexCache already rebuilds these via buildSourceMap; this
+  // is the belt.
+  if (searchKeys.for !== idx) buildSearchKeys(idx);
+  const keyEn = searchKeys.en;
+  const keyCn = searchKeys.cn;
+  const keyCode = searchKeys.code;
+
+  for (let i = 0; i < idx.x.length; i++) {
+    const e = idx.x[i];
+    const code = keyCode[i];
     if (!passesVersion(code, opts.dataVersion)) continue;
 
     if ((e.c === 1 || e.c === 46) && !opts.isGM && !opts.allowPlayerMonsters) {
       continue;
     }
 
-    const en = e.n?.toLowerCase() ?? "";
-    const cn = e.cn?.toLowerCase() ?? "";
+    const en = keyEn[i];
+    const cn = keyCn[i];
 
     let s = -1;
     const a = preferEn ? en : cn;

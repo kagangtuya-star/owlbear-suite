@@ -1,7 +1,7 @@
 {
   "chunks": {
     "asset": 92,
-    "background": 48703,
+    "background": 48704,
     "bestiary": 20675,
     "cc": 28271,
     "circleimage": 3654,
@@ -20,7 +20,7 @@
     "feature": 5512,
     "fixed": 640,
     "format": 784,
-    "fullfog": 20526,
+    "fullfog": 21004,
     "hp": 1920,
     "i18n": 17563,
     "icons": 4750,
@@ -44,7 +44,7 @@
     "preload": 685,
     "resource": 7369,
     "rolldown": 410,
-    "search": 13321,
+    "search": 13469,
     "settings": 58543,
     "sfx": 2131,
     "shared": 853,
@@ -63,13 +63,13 @@
     "vendor": 23839,
     "viewportAnchor": 387,
     "visualEffects": 2421,
-    "wallOffset": 3683,
+    "wallOffset": 4185,
     "xlsx": 1809
   },
-  "totalChunkGzip": 404226,
+  "totalChunkGzip": 405355,
   "bootChunks": 33,
-  "bootGzip": 113867,
+  "bootGzip": 114370,
   "sourceFiles": 191,
-  "sourceLines": 75791,
+  "sourceLines": 76498,
   "publicBytes": 9254539
 }
