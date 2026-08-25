@@ -3312,8 +3312,8 @@ const TABS: TabDef[] = [
         }</p>
         <p>${
           zh
-            ? "光源设置里另有两个本套件特有的开关：<b>环境光</b>（这盏灯对所有人永远可见，用于墙上的火把、天光这类固定照明，不参与下面的遮挡判定）和<b>黑暗视觉 · 彩色半径</b>（半径内正常色调，半径外到照明边缘转为黑白 —— D&amp;D 的暗视）。"
-            : "Light Settings also carries two switches that are ours, not upstream's: <b>Ambient</b> (this light is always visible to everyone — for fixed lighting like wall sconces or daylight — and is exempt from the occlusion rule below) and <b>Darkvision colour radius</b> (full colour inside the radius, greyscale from there out to the edge of the light — D&amp;D darkvision)."
+            ? "光源设置面板刻意和官方 dynamic-fog 的一模一样：<b>照明范围 / 角度 / 边缘 / 类型</b>，外加旋转与移除。唯一的加法不额外占位 —— 类型里多了第三个选项<b>环境光</b>：这盏灯对所有人永远可见、不参与下面的遮挡判定，用于墙上的火把、天光这类固定照明。"
+            : "The Light Settings panel is deliberately identical to the official dynamic-fog one: <b>Range / Angle / Edge / Type</b>, plus Rotate and Remove. The single addition costs no extra field — Type carries a third option, <b>Ambient</b>: always visible to everyone and exempt from the occlusion rule below, for fixed lighting like wall sconces or daylight."
         }</p>
 
         <h3 style="margin-top:14px">${zh ? "选项" : "Options"}</h3>
@@ -3373,21 +3373,6 @@ const TABS: TabDef[] = [
             s.fogLightOcclusion
           }"></button>
         </div>
-        <div class="row">
-          <div class="lbl">
-            ${zh ? "DM 也应用黑暗视觉" : "Apply Darkvision To The DM"}
-            <div class="desc">${
-              zh
-                ? "默认关闭。黑暗视觉的去色环<b>只对自己拥有的 token</b> 生效，而 DM 拥有场景里几乎所有 NPC —— 照章办事会把大半张地图变成黑白。开启后 DM 端也会渲染，用来预览玩家实际看到的效果。"
-                : "Off by default. The darkvision greyscale ring only applies to tokens you own, and the DM owns nearly every NPC in the scene — honouring it for them would drain the colour out of most of the map. Turn it on to preview what a player with darkvision actually sees."
-            }</div>
-          </div>
-          <button class="tog ${
-            s.fogDarkvisionForGM ? "on" : ""
-          }" data-key="fogDarkvisionForGM" type="button" ${isGM ? "" : "disabled"} aria-pressed="${
-            s.fogDarkvisionForGM
-          }"></button>
-        </div>
         ${!isGM ? `<p class="role-notice">${zh ? "玩家端只读 · 由 DM 设置" : "Read-only · Set by DM"}</p>` : ""}
       `;
     },
@@ -3444,8 +3429,7 @@ const TABS: TabDef[] = [
         key:
           | "fogPlayerDoors"
           | "fogDoorOverlayAlways"
-          | "fogLightOcclusion"
-          | "fogDarkvisionForGM",
+          | "fogLightOcclusion",
       ) => {
         root
           .querySelector<HTMLButtonElement>(`.tog[data-key="${key}"]`)
@@ -3457,7 +3441,6 @@ const TABS: TabDef[] = [
       bind("fogPlayerDoors");
       bind("fogDoorOverlayAlways");
       bind("fogLightOcclusion");
-      bind("fogDarkvisionForGM");
     },
   },
   {

@@ -3,6 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <title>光源设置 · fullFog</title>
+    <!--
+      Deliberately the same six controls as upstream dynamic-fog's
+      Menu.tsx — Range / Angle / Edge / Type, then Rotate / Remove — so
+      anyone who has used the official extension already knows this
+      panel. The core-radius and falloff sliders that used to sit here
+      were removed: Edge already picks the two falloff values anyone
+      actually wants, and a raw source-radius slider is a footgun (too
+      large and a torch stops fitting through a doorway).
+
+      "Ambient" is ours, not upstream's, and it is load-bearing for
+      light occlusion — without it a wall sconce is invisible to any
+      player who is not carrying their own torch. Rather than spend a
+      whole extra field on it, it rides in the Type group as a third
+      option, so the panel keeps upstream's shape.
+    -->
     <style>
       * { box-sizing: border-box; }
       html, body {
@@ -21,7 +36,10 @@
       }
       .seg { display: flex; gap: 4px; }
       .seg button {
-        flex: 1; height: 30px; padding: 0;
+        /* min-width:0 matters: a flex item defaults to min-width:auto,
+           so the three-button Type group refuses to shrink below its
+           icons and overflows its grid column in a narrow popover. */
+        flex: 1; min-width: 0; height: 30px; padding: 0;
         display: inline-flex; align-items: center; justify-content: center;
         background: #252934; color: #b9bfcc;
         border: 1px solid #3b4150; border-radius: 4px;
@@ -43,17 +61,6 @@
         color: #e6e8ee; font: inherit; font-variant-numeric: tabular-nums;
       }
       .num .unit { font-size: 11px; color: #7d8494; flex: none; }
-      .slider { margin-top: 2px; }
-      .slider .head {
-        display: flex; justify-content: space-between; align-items: baseline;
-        font-size: 11px; color: #9aa0ad; margin-bottom: 2px;
-      }
-      .slider .val { color: #f5a623; font-variant-numeric: tabular-nums; font-weight: 600; }
-      input[type=range] { width: 100%; accent-color: #f5a623; margin: 0; }
-      .hint {
-        font-size: 10.5px; line-height: 1.5; color: #7d8494;
-        margin: 6px 0 0;
-      }
       .actions { display: flex; gap: 8px; margin-top: 10px; }
       .actions button {
         flex: 1; height: 30px;
@@ -67,10 +74,7 @@
       .actions button.danger:hover { background: #3a1d1d; }
       .actions button svg { width: 16px; height: 16px; }
       .hidden { display: none !important; }
-      #status {
-        font-size: 11.5px; color: #9aa0ad; padding: 6px 0 2px;
-      }
-      hr { border: 0; border-top: 1px solid #2a2e3a; margin: 10px 0 8px; }
+      #status { font-size: 11.5px; color: #9aa0ad; padding: 6px 0 2px; }
     </style>
   </head>
   <body>
@@ -113,63 +117,18 @@
         <div class="field">
           <span class="lbl" data-en="Type">类型</span>
           <div class="seg" id="type">
-            <button type="button" data-value="PRIMARY" title="主光源（照亮并揭开迷雾）" data-en-title="Primary — casts light and clears fog">
+            <button type="button" data-value="PRIMARY" title="主光源：照亮并揭开迷雾" data-en-title="Primary — casts light and clears fog">
               <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7" r="3.4"/><path d="M5 21v-1.6c0-3.2 3.1-5.2 7-5.2s7 2 7 5.2V21z"/></svg>
             </button>
-            <button type="button" data-value="SECONDARY" title="次光源（只照亮已被主光源看到的区域）" data-en-title="Secondary — only lights fog a primary light already sees">
+            <button type="button" data-value="SECONDARY" title="次光源：只照亮已被主光源看到的区域" data-en-title="Secondary — only lights fog a primary light already sees">
               <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c2.5 4 5.5 5.4 5.5 9.4A5.5 5.5 0 0 1 12 17a5.5 5.5 0 0 1-5.5-5.6C6.5 7.4 9.5 6 12 2z"/><path d="M4 20h16v2H4z"/></svg>
             </button>
-          </div>
-        </div>
-      </div>
-
-      <hr />
-
-      <div class="slider">
-        <div class="head">
-          <span data-en="Core radius">核心半径</span>
-          <span class="val" id="source-val">25 px</span>
-        </div>
-        <input type="range" id="source" min="0" max="120" step="1" value="25" />
-      </div>
-
-      <div class="slider">
-        <div class="head">
-          <span data-en="Falloff">衰减曲线</span>
-          <span class="val" id="falloff-val">0.20</span>
-        </div>
-        <input type="range" id="falloff" min="0" max="3" step="0.05" value="0.2" />
-      </div>
-
-      <hr />
-
-      <div class="grid">
-        <div class="field">
-          <span class="lbl" data-en="Darkvision (colour radius)">黑暗视觉 · 彩色半径</span>
-          <div class="num">
-            <input id="colorRadius" type="text" inputmode="decimal" autocomplete="off" value="0" />
-            <span class="unit" id="color-unit">ft</span>
-          </div>
-        </div>
-
-        <div class="field">
-          <span class="lbl" data-en="Ambient">环境光</span>
-          <div class="seg" id="ambient">
-            <button type="button" data-value="OFF"
-                    title="参与光源遮挡：玩家看不见别人的这盏灯，除非有无墙视线"
-                    data-en-title="Occluded — other players only see this light with a wall-free sight line">
-              <span data-en="Occluded">遮挡</span>
-            </button>
-            <button type="button" data-value="ON"
-                    title="环境光：对所有人永远可见，用于墙上火把 / 天光这类固定照明"
-                    data-en-title="Ambient — always visible to everyone; for fixed lighting like sconces or daylight">
-              <span data-en="Ambient">环境</span>
+            <button type="button" data-value="AMBIENT" title="环境光：对所有人永远可见，不参与光源遮挡。用于墙上火把、天光这类固定照明" data-en-title="Ambient — always visible to everyone and exempt from light occlusion; for fixed lighting like wall sconces or daylight">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/><path d="M11 1h2v3.4h-2zm0 18.6h2V23h-2zM1 11h3.4v2H1zm18.6 0H23v2h-3.4zM4.2 5.6l1.4-1.4 2.4 2.4-1.4 1.4zm11.8 11.8 1.4-1.4 2.4 2.4-1.4 1.4zM4.2 18.4l2.4-2.4 1.4 1.4-2.4 2.4zM16 6.6l2.4-2.4 1.4 1.4-2.4 2.4z"/></svg>
             </button>
           </div>
         </div>
       </div>
-
-      <p class="hint" data-en="Colour radius 0 turns darkvision off. Above 0, everything this light reaches beyond that radius renders in greyscale — only on clients that own this token.">彩色半径填 0 即关闭黑暗视觉。大于 0 时，这盏灯照到的、半径以外的部分会变成黑白 —— 只在拥有该 token 的客户端上生效。</p>
 
       <div class="actions">
         <button id="btn-rotate" class="hidden" type="button">

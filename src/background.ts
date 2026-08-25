@@ -606,7 +606,7 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
   // runtime; `dynamicFog` is the engine that turns FOG-layer drawings
   // into per-client walls and owns doors / windows / lights. The
   // engine's AUTHORING surface (light context menu, fog-tool modes,
-  // indicators, player toggle tool, occlusion, darkvision) is gated
+  // indicators, player toggle tool, occlusion) is gated
   // behind !STABLE_HIDES inside the module; the wall derivation
   // itself runs in both channels, because the editor's output is
   // worthless without it. See modules/fullFog/index.ts.

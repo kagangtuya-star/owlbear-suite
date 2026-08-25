@@ -146,11 +146,6 @@ export interface SuiteState {
   // Lights flagged "ambient" in Light Settings are always visible, for
   // fixed room lighting. GMs are never occluded. Default ON.
   fogLightOcclusion: boolean;
-  // 2026-08-25 — apply the darkvision desaturation ring on the GM's
-  // screen too. Off by default: the GM owns every NPC, so honouring it
-  // for them would grey out most of the map. Turn it on to preview
-  // what a player with darkvision sees.
-  fogDarkvisionForGM: boolean;
   libraries: LibraryConfig[];
 }
 
@@ -222,7 +217,7 @@ export const DEFAULT_STATE: SuiteState = {
     // Dynamic fog engine (dynfog) — the port of
     // owlbear-rodeo/dynamic-fog. Turns EVERY FOG-layer drawing into
     // per-client Wall items, owns doors / secret doors / windows,
-    // lights, light occlusion and darkvision. This is what makes fog
+    // lights and light occlusion. This is what makes fog
     // block vision at all, so it is separately switchable from the
     // editor above but on by default. See modules/fullFog/dynfog/.
     dynamicFog: true,
@@ -272,7 +267,6 @@ export const DEFAULT_STATE: SuiteState = {
   fogPlayerDoors: true,
   fogDoorOverlayAlways: false,
   fogLightOcclusion: true,
-  fogDarkvisionForGM: false,
   libraries: DEFAULT_LIBRARIES,
 };
 
@@ -370,9 +364,7 @@ function merge(partial: any): SuiteState {
       partial.fogDoorOverlayAlways ?? DEFAULT_STATE.fogDoorOverlayAlways,
     fogLightOcclusion:
       partial.fogLightOcclusion ?? DEFAULT_STATE.fogLightOcclusion,
-    fogDarkvisionForGM:
-      partial.fogDarkvisionForGM ?? DEFAULT_STATE.fogDarkvisionForGM,
-    libraries,
+      libraries,
   };
 }
 
@@ -393,7 +385,6 @@ function suiteStateEqual(a: SuiteState, b: SuiteState): boolean {
   if (a.fogPlayerDoors !== b.fogPlayerDoors) return false;
   if (a.fogDoorOverlayAlways !== b.fogDoorOverlayAlways) return false;
   if (a.fogLightOcclusion !== b.fogLightOcclusion) return false;
-  if (a.fogDarkvisionForGM !== b.fogDarkvisionForGM) return false;
   for (const k of Object.keys(a.enabled) as ModuleId[]) {
     if (a.enabled[k] !== b.enabled[k]) return false;
   }

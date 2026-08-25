@@ -11,7 +11,7 @@
 //      shapes drawn with Owlbear's own fog tool, and lines drawn with
 //      our Line mode — and derives per-client `Wall` items from them,
 //      minus whatever the openings on them currently remove. It also
-//      owns light sources, light occlusion, darkvision and the
+//      owns light sources, light occlusion and the
 //      door / secret door / window indicators.
 //
 // They were ONE module until 2026-08-25 and are now separately
@@ -148,9 +148,8 @@ function currentOptions(): DynfogOptions {
     playerOpenings: state.fogPlayerDoors,
     alwaysShowOverlay: state.fogDoorOverlayAlways,
     lightOcclusion: state.fogLightOcclusion,
-    darkvisionForGM: state.fogDarkvisionForGM,
     // The authoring surface (light menu, fog-tool modes, indicators,
-    // player toggle tool, occlusion, darkvision) is dev-channel only
+    // player toggle tool, occlusion) is dev-channel only
     // for now; the wall engine runs everywhere because the stable fog
     // editor's output is worthless without it.
     authoring: !STABLE_HIDES,

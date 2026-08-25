@@ -1,12 +1,16 @@
 // Light settings — runs INSIDE the right-click context menu via
 // `contextMenu.create({ embed: { url, height } })`.
 //
-// Control set matches upstream dynamic-fog's Menu.tsx one-for-one
-// (Range / Angle / Edge / Type / Rotate / Remove), plus the two extra
-// sliders the suite's older panel had (core radius and the raw falloff
-// value) so nothing is lost in the swap, plus two fields that are ours
-// alone: the darkvision colour radius and the ambient flag. See
-// `../light/config.ts` for what those two mean.
+// Control set matches upstream dynamic-fog's Menu.tsx one-for-one:
+// Range / Angle / Edge / Type, then Rotate / Remove. Anyone who has
+// used the official extension already knows this panel.
+//
+// One addition, and it does not cost a field: AMBIENT rides in the Type
+// group as a third option. It is ours rather than upstream's, and it is
+// load-bearing for light occlusion — a wall sconce flagged ambient stays
+// visible to a player who is not carrying their own torch, and without
+// it an occluded scene goes black for them. Ambient implies PRIMARY,
+// which is what every fixed light source in practice wants to be.
 //
 // The target is the current selection — that's the token whose context
 // menu opened this embed — re-resolved on selection change so the panel
@@ -46,13 +50,6 @@ const rangeUnitEl = document.getElementById("range-unit") as HTMLSpanElement;
 const angleEl = document.getElementById("angle") as HTMLDivElement;
 const edgeEl = document.getElementById("edge") as HTMLDivElement;
 const typeEl = document.getElementById("type") as HTMLDivElement;
-const sourceEl = document.getElementById("source") as HTMLInputElement;
-const sourceValEl = document.getElementById("source-val") as HTMLSpanElement;
-const falloffEl = document.getElementById("falloff") as HTMLInputElement;
-const falloffValEl = document.getElementById("falloff-val") as HTMLSpanElement;
-const colorRadiusEl = document.getElementById("colorRadius") as HTMLInputElement;
-const colorUnitEl = document.getElementById("color-unit") as HTMLSpanElement;
-const ambientEl = document.getElementById("ambient") as HTMLDivElement;
 const rotateBtn = document.getElementById("btn-rotate") as HTMLButtonElement;
 const removeBtn = document.getElementById("btn-remove") as HTMLButtonElement;
 
@@ -106,15 +103,9 @@ function paint(config: Required<LightConfig>): void {
   const isCone = config.outerAngle !== 360;
   setSegment(angleEl, isCone ? "CONE" : "FULL");
   setSegment(edgeEl, config.falloff > 1 ? "SOFT" : "HARD");
-  setSegment(typeEl, config.lightType);
-  sourceEl.value = String(Math.round(config.sourceRadius));
-  sourceValEl.textContent = `${Math.round(config.sourceRadius)} px`;
-  falloffEl.value = String(config.falloff);
-  falloffValEl.textContent = config.falloff.toFixed(2);
-  colorRadiusEl.value =
-    config.colorRadius > 0 ? pxToUnits(config.colorRadius) : "0";
-  colorUnitEl.textContent = gridScale?.parsed.unit ?? "px";
-  setSegment(ambientEl, config.ambient ? "ON" : "OFF");
+  // Ambient wins the Type group: it is the thing that changes how the
+  // light is TREATED, and an ambient light is always primary anyway.
+  setSegment(typeEl, config.ambient ? "AMBIENT" : config.lightType);
   rotateBtn.classList.toggle("hidden", !isCone);
   syncing = false;
 }
@@ -230,85 +221,24 @@ edgeEl.addEventListener("click", (event) => {
   if (!button?.dataset.value) return;
   const soft = button.dataset.value === "SOFT";
   setSegment(edgeEl, button.dataset.value);
-  const falloff = soft ? FALLOFF_SOFT : FALLOFF_HARD;
-  falloffEl.value = String(falloff);
-  falloffValEl.textContent = falloff.toFixed(2);
-  void patch({ falloff });
+  void patch({ falloff: soft ? FALLOFF_SOFT : FALLOFF_HARD });
 });
 
 typeEl.addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest("button");
   if (!button?.dataset.value) return;
   setSegment(typeEl, button.dataset.value);
-  void patch({ lightType: button.dataset.value as "PRIMARY" | "SECONDARY" });
-});
-
-let sliderTimer: number | null = null;
-function scheduleSliderWrite(update: Partial<LightConfig>): void {
-  if (sliderTimer !== null) clearTimeout(sliderTimer);
-  sliderTimer = window.setTimeout(() => {
-    sliderTimer = null;
-    void patch(update);
-  }, 120);
-}
-
-sourceEl.addEventListener("input", () => {
-  if (syncing) return;
-  const value = Number(sourceEl.value);
-  sourceValEl.textContent = `${value} px`;
-  scheduleSliderWrite({ sourceRadius: value });
-});
-
-falloffEl.addEventListener("input", () => {
-  if (syncing) return;
-  const value = Number(falloffEl.value);
-  falloffValEl.textContent = value.toFixed(2);
-  setSegment(edgeEl, value > 1 ? "SOFT" : "HARD");
-  scheduleSliderWrite({ falloff: value });
-});
-
-/** Darkvision radius. 0 (or anything unparseable) means off, which
- *  is written as an explicit 0 rather than deleted, so a multi-select
- *  clears every light instead of leaving some on. */
-function commitColorRadius(): void {
-  if (syncing) return;
-  const text = colorRadiusEl.value.trim();
-  const parsed = parseFloat(text);
-  if (text === "" || (Number.isFinite(parsed) && parsed <= 0)) {
-    colorRadiusEl.value = "0";
-    void patch({ colorRadius: 0 });
-    return;
+  // Both fields are written every time, so switching away from AMBIENT
+  // actually clears the flag rather than leaving a primary light that
+  // is still quietly exempt from occlusion.
+  if (button.dataset.value === "AMBIENT") {
+    void patch({ ambient: true, lightType: "PRIMARY" });
+  } else {
+    void patch({
+      ambient: false,
+      lightType: button.dataset.value as "PRIMARY" | "SECONDARY",
+    });
   }
-  const px = unitsToPx(text);
-  if (!Number.isFinite(px) || px <= 0) {
-    if (values) {
-      colorRadiusEl.value =
-        values.colorRadius > 0 ? pxToUnits(values.colorRadius) : "0";
-    }
-    return;
-  }
-  void patch({ colorRadius: px });
-}
-
-colorRadiusEl.addEventListener("blur", commitColorRadius);
-colorRadiusEl.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    commitColorRadius();
-    (event.target as HTMLElement).blur();
-  } else if (event.key === "Escape") {
-    if (values) {
-      colorRadiusEl.value =
-        values.colorRadius > 0 ? pxToUnits(values.colorRadius) : "0";
-    }
-    (event.target as HTMLElement).blur();
-  }
-});
-
-ambientEl.addEventListener("click", (event) => {
-  const button = (event.target as HTMLElement).closest("button");
-  if (!button?.dataset.value) return;
-  setSegment(ambientEl, button.dataset.value);
-  void patch({ ambient: button.dataset.value === "ON" });
 });
 
 rotateBtn.addEventListener("click", () => {
@@ -343,12 +273,7 @@ OBR.onReady(async () => {
     OBR.scene.items.onChange(() => {
       // Don't fight the user mid-edit: skip the repaint while a field
       // has focus.
-      if (
-        document.activeElement === rangeEl ||
-        document.activeElement === colorRadiusEl
-      ) {
-        return;
-      }
+      if (document.activeElement === rangeEl) return;
       void load();
     });
   } catch {}

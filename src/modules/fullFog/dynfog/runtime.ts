@@ -18,10 +18,6 @@ let alwaysShowOverlay = false;
 /** GM setting: hide other people's lights unless a wall-free sight line
  *  reaches them from one of your own. See `light/occlusion.ts`. */
 let lightOcclusion = true;
-/** GM setting: apply the darkvision desaturation on the GM's screen
- *  too. Off by default — the GM is meant to see the whole map in
- *  colour; this is for previewing what a player gets. */
-let darkvisionForGM = false;
 
 export function getSceneDpi(): number {
   return sceneDpi;
@@ -43,9 +39,6 @@ export function getAlwaysShowOverlay(): boolean {
 }
 export function getLightOcclusionEnabled(): boolean {
   return lightOcclusion;
-}
-export function getDarkvisionForGM(): boolean {
-  return darkvisionForGM;
 }
 
 /** @returns true when the value actually changed. */
@@ -86,11 +79,6 @@ export function setLightOcclusionEnabled(value: boolean): boolean {
   return true;
 }
 
-export function setDarkvisionForGM(value: boolean): boolean {
-  if (darkvisionForGM === value) return false;
-  darkvisionForGM = value;
-  return true;
-}
 
 /** Pull the current values from OBR. Returns true when anything moved. */
 export async function refreshRuntime(): Promise<boolean> {

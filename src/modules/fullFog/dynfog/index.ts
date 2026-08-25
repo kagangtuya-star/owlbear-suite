@@ -13,7 +13,7 @@
 //   every channel   walls, lights, self lights — scene CONTENT. Missing
 //                   any of these makes a lit scene unviewable.
 //   authoring only  tools, context menus, indicators, the player toggle
-//                   channel, occlusion and darkvision — things a GM
+//                   channel and occlusion — things a GM
 //                   configures, and a channel with no settings tab for
 //                   them should not silently get them.
 //   GM only         the fog-tool modes and the light context menu.
@@ -26,7 +26,6 @@ import {
   LightReactor,
   SelfLightReactor,
 } from "./reconcile/reactors/LightReactor";
-import { DarkvisionReactor } from "./reconcile/reactors/DarkvisionReactor";
 import { LightOcclusion } from "./light/occlusion";
 import { initOverlay, syncOverlays, teardownOverlay } from "./overlay";
 import { createLineMode, removeLineMode } from "./tools/createLineMode";
@@ -45,7 +44,6 @@ import {
   isGM,
   refreshRuntime,
   setAlwaysShowOverlay,
-  setDarkvisionForGM,
   setLightOcclusionEnabled,
   setPlayerOpeningsEnabled,
   setSceneDpi,
@@ -59,8 +57,6 @@ export interface DynfogOptions {
   /** Hide other people's lights unless a wall-free sight line reaches
    *  them from one of your own. See `light/occlusion.ts`. */
   lightOcclusion: boolean;
-  /** Apply the darkvision desaturation on the GM's screen too. */
-  darkvisionForGM: boolean;
   /**
    * Register the AUTHORING surface — light context menu, the fog-tool
    * line/door/window modes, the indicator overlays and the player
@@ -122,15 +118,13 @@ export async function applyDynfogSettings(
   authoring = options.authoring;
   const a = setPlayerOpeningsEnabled(options.playerOpenings);
   const b = setAlwaysShowOverlay(options.alwaysShowOverlay);
-  // Both of these change what the reactors should be producing, not
-  // just how they look, so they need a full refresh rather than an
-  // overlay resync: occlusion re-allows every light it had hidden, and
-  // the darkvision reactor's filter answers differently.
+  // Occlusion changes what the reactors should be PRODUCING, not just
+  // how it looks, so it needs a full refresh rather than an overlay
+  // resync — turning it off has to re-allow every light it had hidden.
   const c = setLightOcclusionEnabled(options.lightOcclusion);
-  const d = setDarkvisionForGM(options.darkvisionForGM);
   await syncGmTools();
   await syncToggleTool();
-  if ((a || b || c || d) && reconciler && authoring) {
+  if ((a || b || c) && reconciler && authoring) {
     syncOverlays(reconciler);
     reconciler.refresh();
   }
@@ -147,7 +141,6 @@ export async function setupDynfog(options: DynfogOptions): Promise<void> {
   setPlayerOpeningsEnabled(options.playerOpenings);
   setAlwaysShowOverlay(options.alwaysShowOverlay);
   setLightOcclusionEnabled(options.lightOcclusion);
-  setDarkvisionForGM(options.darkvisionForGM);
   await refreshRuntime();
 
   reconciler = new Reconciler();
@@ -160,12 +153,11 @@ export async function setupDynfog(options: DynfogOptions): Promise<void> {
   reconciler.register(new LightReactor(reconciler));
   reconciler.register(new SelfLightReactor(reconciler));
   if (authoring) {
-    // These two CHANGE what light does rather than provide it, so they
-    // stay on the authoring side: a channel without the settings tab to
-    // configure them should get plain upstream behaviour.
-    reconciler.register(new DarkvisionReactor(reconciler));
-    // Occlusion runs after every reactor has settled, so it reads the
-    // walls and the light positions from the SAME pass.
+    // Occlusion CHANGES what light does rather than providing it, so it
+    // stays on the authoring side: a channel without the settings tab
+    // to configure it should get plain upstream behaviour. It runs
+    // after every reactor has settled, so it reads the walls and the
+    // light positions from the SAME pass.
     occlusion = new LightOcclusion(reconciler);
     subscriptions.push(
       reconciler.onAfterReconcile(() => occlusion?.run()),
