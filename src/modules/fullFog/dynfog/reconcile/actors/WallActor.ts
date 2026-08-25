@@ -50,6 +50,9 @@ export class WallActor extends Actor {
   private derivedMatrix: Matrix = identityMatrix();
   /** Memoised 墙体外扩 result — see `expandedContours`. */
   private expandedCache: { key: string; polys: Vector2[][] } | null = null;
+  /** The transform last written onto the wall items, so an update that
+   *  only changed a door somewhere else does not have to rewrite it. */
+  private appliedTransform = "";
 
   constructor(reconciler: Reconciler, parent: Item) {
     super(reconciler);
@@ -63,6 +66,7 @@ export class WallActor extends Actor {
       this.signature = this.computeSignature(parent);
       this.derived = polylines;
       this.derivedMatrix = itemMatrix(parent);
+      this.appliedTransform = transformKey(parent);
       const items = polylines.map((p) => this.polylineToWall(parent, p));
       this.walls = items.map((i) => i.id);
       if (items.length > 0) this.reconciler.patcher.addItems(...items);
@@ -101,29 +105,40 @@ export class WallActor extends Actor {
     if (signature === this.signature) return;
     this.signature = signature;
 
-    const prev = this.walls;
+    const previous = this.derived;
     const next = this.computePolylines(parent);
+    const transform = transformKey(parent);
+    const moved = transform !== this.appliedTransform;
     this.derived = next;
     this.derivedMatrix = itemMatrix(parent);
+    this.appliedTransform = transform;
 
-    if (prev.length < next.length) {
-      for (let i = prev.length; i < next.length; i++) {
-        const wall = this.polylineToWall(parent, next[i]);
-        prev.push(wall.id);
-        this.reconciler.patcher.addItems(wall);
-      }
-    } else if (prev.length > next.length) {
-      const removed = prev.splice(next.length, prev.length - next.length);
-      if (removed.length > 0) this.reconciler.patcher.deleteItems(...removed);
+    const ids = this.walls;
+
+    // GROW FIRST, SHRINK LAST — with the Patcher flushing adds before
+    // deletes, that keeps the blocking set a superset of the target at
+    // every intermediate state. See Patcher.flush.
+    const grownFrom = ids.length;
+    for (let i = grownFrom; i < next.length; i++) {
+      const wall = this.polylineToWall(parent, next[i]);
+      ids.push(wall.id);
+      this.reconciler.patcher.addItems(wall);
     }
 
-    // Walls that survive get their points — and the parent's transform,
-    // which may have moved — patched in place.
-    for (let i = 0; i < prev.length; i++) {
-      const id = prev[i];
+    // Patch only what actually moved.
+    //
+    // A door toggle anywhere in the scene bumps every WallActor's
+    // signature, because an opening on an overlapping shape can cut
+    // this one (see computeSignature). Without this test every wall in
+    // the scene would be rewritten on every toggle — on a traced map
+    // that is thousands of items per click, and the resulting stall is
+    // long enough to see as a flicker.
+    const keep = Math.min(grownFrom, next.length);
+    for (let i = 0; i < keep; i++) {
       const points = next[i];
+      if (!moved && samePolyline(previous[i], points)) continue;
       this.reconciler.patcher.updateItems([
-        id,
+        ids[i],
         (item) => {
           if (!isWall(item)) return;
           item.points = points;
@@ -132,6 +147,11 @@ export class WallActor extends Actor {
           item.scale = parent.scale;
         },
       ]);
+    }
+
+    if (ids.length > next.length) {
+      const removed = ids.splice(next.length, ids.length - next.length);
+      if (removed.length > 0) this.reconciler.patcher.deleteItems(...removed);
     }
   }
 
@@ -280,4 +300,27 @@ export class WallActor extends Actor {
       .disableAttachmentBehavior(["VISIBLE", "COPY"])
       .build();
   }
+}
+
+/** Everything about the parent that gets written onto its wall items. */
+function transformKey(parent: Item): string {
+  return [
+    parent.position.x,
+    parent.position.y,
+    parent.rotation,
+    parent.scale.x,
+    parent.scale.y,
+  ].join(",");
+}
+
+/** Exact equality. `computePolylines` rebuilds its arrays every pass so
+ *  reference equality never fires, but the VALUES are identical for any
+ *  contour the change did not touch — which, on a door toggle, is all
+ *  of them but one. */
+function samePolyline(a: Vector2[] | undefined, b: Vector2[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].x !== b[i].x || a[i].y !== b[i].y) return false;
+  }
+  return true;
 }

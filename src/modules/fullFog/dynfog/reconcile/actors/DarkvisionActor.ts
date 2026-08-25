@@ -18,6 +18,9 @@
 //   * Two darkvision tokens overlapping stack their rings; the second
 //     one has nothing left to desaturate, so it is a no-op.
 //
+// The ring lives on the ATTACHMENT layer. See `build()` for why that
+// matters more than it looks like it should.
+//
 // EFFECT items are rejected by `OBR.scene.items.addItems` — they can
 // only be added to the LOCAL scene, which is exactly where every dynfog
 // child lives anyway. That also makes darkvision correctly per-client:
@@ -36,23 +39,27 @@ import { normaliseLightConfig, withDefaults } from "../../light/config";
 import { getSceneDpi } from "../../runtime";
 
 /**
- * `coord` runs 0..iSize over the effect's own box, so the centre is at
- * iSize/2 and the outer radius is exactly half the box.
+ * `coord` runs 0..iSize across the effect's own box in SCENE units, so
+ * the centre sits at iSize/2 and the outer radius is exactly half the
+ * box. Declaration style (`float2`, an explicitly-passed `iSize`) is
+ * copied from `bubbles`' HP shimmer, the shader in this codebase with
+ * the most mileage on it.
  *
  * The output is PREMULTIPLIED, hence `grey * a` rather than `grey`. Any
  * neutral value works — SATURATION reads only the source's saturation,
  * which is zero for every grey — so 0.5 is arbitrary but honest.
  *
- * `smoothstep` over the last stretch before `rInner` keeps the boundary
- * from crawling with jagged pixels as the token moves.
+ * If the uniforms ever fail to bind they all read 0, and `d > rOuter`
+ * then makes every pixel transparent. That is deliberate: the failure
+ * mode is "darkvision does nothing", never "the whole screen is grey".
  */
-const DARKVISION_SKSL = `uniform vec2 iSize;
+const DARKVISION_SKSL = `uniform float2 iSize;
 uniform float rInner;
 uniform float rOuter;
 uniform float feather;
 
 half4 main(float2 coord) {
-  vec2 centre = iSize * 0.5;
+  float2 centre = iSize * 0.5;
   float d = distance(coord, centre);
   // Outside the light entirely: nothing to drain, and leaving it clear
   // stops the ring from greying out map the token cannot light at all.
@@ -184,13 +191,27 @@ export class DarkvisionActor extends Actor {
       ])
       .position(this.topLeft(parent, geometry))
       .attachedTo(parent.id)
-      // Above the fog, below the CONTROL layer's UI, so it drains
-      // colour from the map, the tokens and the fog alike but never
-      // from a tool overlay.
-      .layer("POST_PROCESS")
+      // ATTACHMENT, not POST_PROCESS.
+      //
+      // POST_PROCESS is exactly what it sounds like: Owlbear runs those
+      // over the finished frame in VIEWPORT space, which throws away
+      // the world-space box this shader is built around. `coord` then
+      // ran across the screen instead of across the light, the centre
+      // landed off-screen, and every pixel came out past rInner — which
+      // is why the first cut greyed the entire view the moment
+      // darkvision was switched on, with no colour disc anywhere.
+      //
+      // ATTACHMENT is world-space and sits above MAP and CHARACTER, so
+      // the ring drains colour from the terrain and the tokens, which
+      // is the whole job. It sits BELOW fog, and that is correct too:
+      // fog is opaque black, and desaturated black is black.
+      .layer("ATTACHMENT")
       .disableAttachmentBehavior(["SCALE", "ROTATION", "COPY", "LOCKED"])
+      // Bottom of the attachment layer. A blend mode only affects what
+      // was drawn BEFORE it, so drawing first is what keeps HP bars,
+      // buff bubbles and the rest of the attachment layer in colour.
       .disableAutoZIndex(true)
-      .zIndex(1)
+      .zIndex(0)
       .disableHit(true)
       .locked(true)
       .visible(parent.visible)

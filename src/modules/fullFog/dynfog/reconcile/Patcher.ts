@@ -64,17 +64,30 @@ export class Patcher {
     return this.queue;
   }
 
-  /** Deletes first so an id can be recycled within one pass, then
-   *  adds, then updates. */
+  /**
+   * Adds, then updates, then deletes — "grow before shrink".
+   *
+   * Each of the three is a separate round trip to the local scene and
+   * Owlbear renders between them, so the ORDER decides what a player
+   * sees mid-flight. Deleting first was actively harmful: closing a
+   * door deletes the second wall piece and then widens the first one
+   * back to a full loop, and in the frame between those two calls the
+   * whole of the second piece is simply missing. Vision floods through
+   * it and the party gets a one-frame look at the room they were not
+   * supposed to see yet.
+   *
+   * Adding first inverts that. At every intermediate state the set of
+   * blocking walls is a SUPERSET of the final one, so the worst case is
+   * one frame of over-blocking — invisible, because over-blocking just
+   * leaves the fog where it already was.
+   *
+   * This does mean an id cannot be deleted and re-added inside a single
+   * pass. Nothing does: every actor mints a fresh id (`buildWall()` and
+   * friends generate their own), so a delete + add pair is always two
+   * different items.
+   */
   private async flush(batch: Batch) {
     if (!this.ready) return;
-    if (batch.deletions.length > 0) {
-      try {
-        await OBR.scene.local.deleteItems(batch.deletions);
-      } catch (e) {
-        console.warn("[dynfog] local delete failed", e);
-      }
-    }
     if (batch.additions.length > 0) {
       try {
         await OBR.scene.local.addItems(batch.additions);
@@ -93,6 +106,13 @@ export class Patcher {
         });
       } catch (e) {
         console.warn("[dynfog] local update failed", e);
+      }
+    }
+    if (batch.deletions.length > 0) {
+      try {
+        await OBR.scene.local.deleteItems(batch.deletions);
+      } catch (e) {
+        console.warn("[dynfog] local delete failed", e);
       }
     }
   }

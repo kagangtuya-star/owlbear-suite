@@ -613,6 +613,92 @@ export function runDynfogSelfTest(): TestResult[] {
     );
   }
 
+  // --- wall churn (the door-toggle flicker) ---------------------------------
+
+  {
+    // WallActor skips patching a wall whose points did not change, and
+    // that skip is what stops a door toggle from rewriting every wall
+    // in the scene. It is only sound if re-deriving identical inputs
+    // gives value-identical output — no jitter from floating-point
+    // accumulation, no reordering.
+    const inputs = () => ({
+      polylines: drawingToPolylines(rectShape(100, 60)),
+      openings: [door({ open: true })],
+      foreignCuts: [] as Cut[],
+    });
+    const a = deriveWallPolylines(inputs());
+    const b = deriveWallPolylines(inputs());
+    let identical = a.length === b.length;
+    if (identical) {
+      for (let i = 0; i < a.length && identical; i++) {
+        if (a[i].length !== b[i].length) {
+          identical = false;
+          break;
+        }
+        for (let j = 0; j < a[i].length; j++) {
+          if (a[i][j].x !== b[i][j].x || a[i][j].y !== b[i][j].y) {
+            identical = false;
+            break;
+          }
+        }
+      }
+    }
+    check(
+      "re-deriving the same inputs is bit-identical",
+      identical,
+      `pieces=${a.length}`,
+    );
+  }
+
+  {
+    // The other half of the same claim: a door opening on a shape far
+    // away contributes a cut, but must leave this shape's walls exactly
+    // as they were — otherwise every toggle really would touch every
+    // wall and the skip could never fire.
+    const polylines = drawingToPolylines(rectShape(100, 60));
+    const before = deriveWallPolylines({
+      polylines,
+      openings: [],
+      foreignCuts: [],
+    });
+    const faraway: Cut[] = [
+      {
+        openingId: "elsewhere",
+        parentId: "other",
+        points: [
+          { x: 5000, y: 5000 },
+          { x: 5040, y: 5000 },
+        ],
+        radius: 20,
+        bbox: bboxOf(
+          [
+            { x: 5000, y: 5000 },
+            { x: 5040, y: 5000 },
+          ],
+          20,
+        ),
+      },
+    ];
+    const after = deriveWallPolylines({
+      polylines,
+      openings: [],
+      foreignCuts: faraway,
+    });
+    let same = before.length === after.length;
+    for (let i = 0; i < before.length && same; i++) {
+      same =
+        before[i].length === after[i].length &&
+        before[i].every(
+          (p, j) => p.x === after[i][j].x && p.y === after[i][j].y,
+        );
+    }
+    check(
+      "a door on a distant shape leaves this shape's walls untouched",
+      same,
+      `before=${before.length} after=${after.length}`,
+    );
+  }
+
   // --- line of sight (light occlusion) --------------------------------------
 
   {
