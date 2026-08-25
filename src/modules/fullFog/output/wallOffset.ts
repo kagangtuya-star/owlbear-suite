@@ -151,11 +151,16 @@ function rayHitDistance(
  * Uniform grid over a contour's edges, so a vertex can ask "which
  * edges are near me" instead of testing all of them.
  *
- * The clamp below only cares about a hit closer than `targetDist * 2`,
- * and `targetDist` is capped at MITER_LIMIT × |distance| by
- * `miteredTargets` — so there is a single global bound on how far any
- * ray can usefully reach. Cells are that size, which puts every
- * candidate edge in the 3×3 block around the vertex.
+ * The clamp below only cares about a hit closer than `targetDist * 2`.
+ * `miteredTargets` caps `targetDist` at MITER_LIMIT × |distance|, but
+ * that worst case only happens at sharp convex corners — the typical
+ * vertex moves about |distance|, so its useful reach is about
+ * 2 × |distance|, four times smaller than the global bound.
+ *
+ * Cells are therefore sized to |distance| and each vertex queries only
+ * as many rings as ITS OWN reach needs. Sizing them to the global bound
+ * instead made every query sweep a 144×144 area to serve a ray that
+ * usually travels 12.
  *
  * This returns a SUPERSET of the edges that could qualify, and the
  * clamp takes a MIN over whatever qualifies. Min is order-independent
@@ -172,7 +177,7 @@ class EdgeGrid {
   private minY: number;
   private cols: number;
 
-  constructor(poly: Vec2[], reach: number) {
+  constructor(poly: Vec2[], cellSize: number) {
     const n = poly.length;
     this.stamps = new Int32Array(n);
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -182,7 +187,7 @@ class EdgeGrid {
       if (p.x > maxX) maxX = p.x;
       if (p.y > maxY) maxY = p.y;
     }
-    this.cell = Math.max(reach, 1e-6);
+    this.cell = Math.max(cellSize, 1e-6);
     this.minX = minX;
     this.minY = minY;
     this.cols = Math.max(1, Math.ceil((maxX - minX) / this.cell) + 1);
@@ -215,14 +220,19 @@ class EdgeGrid {
     return Math.floor((y - this.minY) / this.cell);
   }
 
-  /** Edge indices within `reach` of (x, y), each yielded once. */
-  near(x: number, y: number, out: number[]): void {
+  /** Edge indices within `reach` of (x, y), each yielded once.
+   *
+   *  The ring count is derived from `reach`, so the query covers at
+   *  least a `reach`-radius disc around the point — a superset of what
+   *  the ray can hit, which is what makes the result exact. */
+  near(x: number, y: number, reach: number, out: number[]): void {
     out.length = 0;
     this.pass++;
     const c = this.col(x);
     const r = this.row(y);
-    for (let rr = r - 1; rr <= r + 1; rr++) {
-      for (let cc = c - 1; cc <= c + 1; cc++) {
+    const rings = Math.max(1, Math.ceil(reach / this.cell));
+    for (let rr = r - rings; rr <= r + rings; rr++) {
+      for (let cc = c - rings; cc <= c + rings; cc++) {
         const bucket = this.cells.get(rr * this.cols + cc);
         if (!bucket) continue;
         for (const j of bucket) {
@@ -243,7 +253,7 @@ function perVertexRaycastClamp(
   poly: Vec2[],
   targets: Vec2[],
   minPx: number,
-  reach: number,
+  cellSize: number,
   useIndex: boolean,
 ): Vec2[] {
   const n = poly.length;
@@ -251,7 +261,7 @@ function perVertexRaycastClamp(
   // Below this the grid costs more than it saves, and the O(n²) loop
   // is already trivial. `useIndex` false forces the brute-force path,
   // which the selftest uses as the reference to fuzz the grid against.
-  const grid = useIndex && n >= 64 ? new EdgeGrid(poly, reach) : null;
+  const grid = useIndex && n >= 64 ? new EdgeGrid(poly, cellSize) : null;
   const candidates: number[] = [];
   const result: Vec2[] = new Array(n);
   for (let i = 0; i < n; i++) {
@@ -270,7 +280,7 @@ function perVertexRaycastClamp(
     let maxAllowed = targetDist;
     const prevEdge = (i - 1 + n) % n;
     if (grid) {
-      grid.near(orig.x, orig.y, candidates);
+      grid.near(orig.x, orig.y, targetDist * 2, candidates);
       for (let k = 0; k < candidates.length; k++) {
         const j = candidates[k];
         // Skip the two edges adjacent to vertex i (i-1→i and i→i+1).
@@ -341,11 +351,11 @@ export function safeWallOffset(
     if (p.length < 3) { out[i] = p.slice(); continue; }
     const distance = outer[i] ? +userExpand : -userExpand;
     const targets = miteredTargets(p, distance);
-    // Longest a ray can usefully travel: targetDist is capped at
-    // MITER_LIMIT × |distance| in miteredTargets, and the clamp only
-    // looks out to 2 × targetDist.
-    const reach = 2 * MITER_LIMIT * Math.abs(distance);
-    out[i] = perVertexRaycastClamp(p, targets, minPx, reach, useIndex);
+    // Grid resolution, not a bound: a typical vertex moves about
+    // |distance| and so reaches about 2 × that. Each vertex widens its
+    // own query when it needs to.
+    const cellSize = Math.abs(distance);
+    out[i] = perVertexRaycastClamp(p, targets, minPx, cellSize, useIndex);
   }
   return out;
 }

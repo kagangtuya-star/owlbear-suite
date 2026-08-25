@@ -1000,7 +1000,7 @@ export function runDynfogSelfTest(): TestResult[] {
     let worst = 0;
     let cases = 0;
     let bigEnoughForGrid = false;
-    for (let trial = 0; trial < 25; trial++) {
+    for (let trial = 0; trial < 60; trial++) {
       // Ring with a radius that swings in and out, which produces the
       // pinches the clamp exists for. >=64 vertices so the grid path is
       // actually taken (below that the code stays brute force).
@@ -1019,7 +1019,10 @@ export function runDynfogSelfTest(): TestResult[] {
       // A couple of duplicate vertices, which the degenerate guards care about.
       poly.splice(5, 0, { x: poly[5].x, y: poly[5].y });
 
-      for (const dist of [3, 6, -4, 12]) {
+      // Deliberately awkward distances: the grid cell is |distance| and a
+      // vertex queries ceil(reach / cell) rings, so ratios that are NOT
+      // whole numbers are the ones that tell ceil apart from floor.
+      for (const dist of [3, 6, -4, 12, 2.7, 5.3, -3.1, 9.4, 0.9, 17.2]) {
         const indexed = safeWallOffset([poly], dist, 1, true);
         const brute = safeWallOffset([poly], dist, 1, false);
         cases++;
