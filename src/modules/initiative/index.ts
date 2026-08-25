@@ -36,7 +36,21 @@ import { assetUrl } from "../../asset-base";
 // `syncStealthOverlays` is no longer called — see the inline comment in
 // setupInitiative() about retiring the shader path in favour of native
 // `item.visible = false`.
-import { clearStealthOverlays } from "./utils/visualEffects";
+// DYNAMIC, not static. visualEffects.ts is 545 lines of SKSL shaders
+// and ring rendering, and `initiative/index.ts` is in background.ts's
+// import graph — so a static import put all 8.8 kB gzip of it on the
+// boot path that every client pays, for one cleanup sweep.
+//
+// The panel (initiative/panel-page.tsx, its own entry) is what actually
+// uses the ring functions, and it still imports them statically. This
+// only takes the module off the BACKGROUND's critical path.
+//
+// All three call sites are already async, inside try/catch, and none is
+// latency-critical: two run at scene-ready, one at teardown.
+async function clearStealthOverlays(): Promise<void> {
+  const mod = await import("./utils/visualEffects");
+  await mod.clearStealthOverlays();
+}
 import { onViewportResize } from "../../utils/viewportAnchor";
 // 2026-05-14 — defer the gather move into the portals module's blink
 // handshake so the position update happens AT eyelid apex. Without

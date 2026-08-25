@@ -13,15 +13,14 @@ import {
   onLangChange,
 } from "./state";
 import { applyLangAttr } from "./i18n";
-import {
-  exportScene,
-  downloadBlob,
-  type ExportProgress,
-} from "./modules/worldPack/exporter";
-import {
-  importPackFromBlob,
-  type ImportProgress,
-} from "./modules/worldPack/importer";
+// TYPE-ONLY, so these are erased at build time and cost nothing. The
+// world-pack exporter and importer are ~930 lines between them (plus an
+// image encoder) and are reachable ONLY from the two click handlers on
+// the worldPack tab, so their code is pulled in dynamically there
+// instead of riding in the settings chunk for everyone who opens
+// settings for any other reason.
+import type { ExportProgress } from "./modules/worldPack/exporter";
+import type { ImportProgress } from "./modules/worldPack/importer";
 import { ICONS } from "./icons";
 import { assetUrl } from "./asset-base";
 import { STABLE_HIDES } from "./feature-flags";
@@ -3520,6 +3519,9 @@ const TABS: TabDef[] = [
         exportBtn.disabled = true;
         try {
           writeProg("正在采集场景…");
+          const { exportScene, downloadBlob } = await import(
+            "./modules/worldPack/exporter"
+          );
           const result = await exportScene({
             // Image embedding is permanently OFF — OBR rejects items
             // with image.url > 2048 chars on import, so embedded packs
@@ -3569,6 +3571,9 @@ const TABS: TabDef[] = [
         importBtn!.disabled = true;
         try {
           writeImpProg("解析 .fobr…");
+          const { importPackFromBlob } = await import(
+            "./modules/worldPack/importer"
+          );
           const result = await importPackFromBlob(file, {
             mode: importMode,
             applyRoomMetadata: applyRoomMeta,

@@ -1064,11 +1064,25 @@ export async function syncTokenBuffs(token: Image, buffs: BuffDef[]): Promise<bo
     tokenLocalCache.set(token.id, new Map());
   }
 
-  await particles.syncForToken(token.id, desc.effectBuffs, {
-    cx: desc.cx, cy: desc.cy,
-    tokenW: desc.tokenW, tokenH: desc.tokenH,
-    ringRadius: desc.ringRadius,
-  });
+  // Guarded on the same const that decides whether `effectBuffs` can
+  // ever be non-empty (see the classify step above). With the flag off
+  // this call was reached on every token sync and provably did nothing:
+  // `particles` drives everything off a module-level map that only
+  // `syncForToken` fills, and it only fills from a non-empty
+  // `effectBuffs`.
+  //
+  // Making that explicit is not just tidier — it lets the bundler drop
+  // particles.ts (17.7 kB of source: shader strings, a rAF ticker, item
+  // pooling) out of the BACKGROUND chunk, which every client loads at
+  // boot. Flipping STATUS_EFFECTS_ENABLED back to true restores both
+  // the call and the module, so this is a kill-switch, not a deletion.
+  if (STATUS_EFFECTS_ENABLED) {
+    await particles.syncForToken(token.id, desc.effectBuffs, {
+      cx: desc.cx, cy: desc.cy,
+      tokenW: desc.tokenW, tokenH: desc.tokenH,
+      ringRadius: desc.ringRadius,
+    });
+  }
   return !sceneDeleteFailed && !sceneAddFailed;
 }
 
@@ -1164,7 +1178,11 @@ export async function sweepAllOurItems(): Promise<void> {
   // index.ts — callers there serialize, but keep the sweep self-safe).
   invalidateAllBuffCaches();
   // Reset particles module's internal Map + stop its rAF tick.
-  await particles.clearAll();
+  // Same kill-switch as in syncBubblesForToken: with effects off the
+  // map is always empty and there is no tick, so this was a no-op.
+  if (STATUS_EFFECTS_ENABLED) {
+    await particles.clearAll();
+  }
 }
 
 /** Read buff-id list from token metadata. */
