@@ -199,7 +199,7 @@ async function setBubbleOverheadMode(value: boolean): Promise<void> {
 
 const SUPPORT: BilingualHtml = {
   zh: `
-    <p>这套插件由 <b>弗人 FullPeople</b> 利用业余时间维护，所有代码开源于 GitHub。如果它对你的跑团有帮助，欢迎以下方式支持作者：</p>
+    <p>这套插件由 <b>弗人 FullPeople</b> 利用业余时间开发，所有代码开源于 GitHub。如果这个插件真的让你感到惊喜，欢迎以下方式支持作者：</p>
     <div class="support-row">
       <a class="support-btn kofi" href="${KOFI_URL}" target="_blank" rel="noopener"><span class="ic">${ICONS.coffee}</span> Support on Ko-fi</a>
       <span class="qr-pair" title="微信 / 支付宝">
@@ -210,12 +210,10 @@ const SUPPORT: BilingualHtml = {
     <p style="font-size:11px;color:#9aa0b3;margin-top:-2px">微信 / 支付宝扫码也可以，备注里留个昵称就能上鸣谢墙。</p>
     <h3>${ICONS.heart} 鸣谢</h3>
     <div class="thanks-call-to-action">
-     <p><b>朋友们！感谢支持。</b> 该项目已经快接近尾声了，枭熊原生的功能已经很难再有精彩的发挥了，等bug修复后会接近封盘状态。</p>
-      <p>项目代码全部开源，封盘后更会更新到最新版本。</p>
-      <p>感谢大家的支持和陪伴，虽然作为免费分享的插件，主要是用来满足我自己的需求的同时，完美主义和对"这个功能明明可以做的更好"的不甘在驱使我前进——但每次看到各位的无偿捐赠都会让我觉得：<b>我做的事情是有意义的，大家和我是一样困扰的，没有人应该因为将就能用勉强能用就屈服于不方便的功能，而大家和我是共鸣的。</b></p>
+      <p><b>朋友们！感谢支持。</b> 套件现在已经是一套相当完整的工具了 —— 骰子、先攻、怪物图鉴、人物卡、动态迷雾、传送门、状态追踪…… 枭熊原生能力允许的范围，基本都做进来了，并且仍在持续打磨和修复。</p>
       <p>你们的名字正在窗外飘动 —— 想让自己的<b>头像 / 角色立绘 / 方头立绘</b>挂在名字前面吗？请把图片发到我邮箱：</p>
       <p style="margin-top:6px"><a href="mailto:${EMAIL}"><code>${EMAIL}</code></a></p>
-      <p style="font-size:11px;color:#9aa0b3;margin-top:6px">下周我会统一收集并合入名字前。无所谓尺寸，PNG / JPG / SVG 都可以，请使用透明背景方形或圆形立绘。如果可以请尽可能避免AI创作。</p>
+      <p style="font-size:11px;color:#9aa0b3;margin-top:6px">我会不定期统一收集并合入名字前。无所谓尺寸，PNG / JPG / SVG 都可以，请使用透明背景方形或圆形立绘。如果可以请尽可能避免 AI 创作。</p>
     </div>
     <h3>${ICONS.mail} 反馈</h3>
     <div class="contact-box">
@@ -228,7 +226,7 @@ const SUPPORT: BilingualHtml = {
     </div>
   `,
   en: `
-    <p>This plugin suite is built and maintained by <b>弗人 FullPeople</b> in spare time, with all code open-sourced on GitHub. If you find it useful for your campaigns, here are ways to support the author:</p>
+    <p>This plugin suite is built by <b>弗人 FullPeople</b> in spare time, with all code open-sourced on GitHub. If this plugin genuinely surprised you, here are ways to support the author:</p>
     <div class="support-row">
       <a class="support-btn kofi" href="${KOFI_URL}" target="_blank" rel="noopener"><span class="ic">${ICONS.coffee}</span> Support on Ko-fi</a>
       <span class="qr-pair" title="WeChat / Alipay (CN)">
@@ -239,9 +237,10 @@ const SUPPORT: BilingualHtml = {
     <p style="font-size:11px;color:#9aa0b3;margin-top:-2px">WeChat / Alipay also works for CN supporters — leave a nickname in the tip note to get listed in the wall behind this panel.</p>
     <h3>${ICONS.heart} Thanks</h3>
     <div class="thanks-call-to-action">
+      <p>The suite is a fairly complete toolkit at this point — dice, initiative, bestiary, character cards, dynamic fog, portals, status tracking — just about everything Owlbear's own plugin surface allows, and still being polished.</p>
       <p><b>Everyone who chipped in ❤</b> your names are drifting around behind this panel. Want your <b>avatar / character portrait / square headshot</b> shown beside your name? Email me a picture:</p>
       <p style="margin-top:6px"><a href="mailto:${EMAIL}"><code>${EMAIL}</code></a></p>
-      <p style="font-size:11px;color:#9aa0b3;margin-top:6px">I'll batch them in next week. Any size, PNG / JPG / SVG works — square transparent backgrounds or vertical portraits look best.</p>
+      <p style="font-size:11px;color:#9aa0b3;margin-top:6px">I batch them in from time to time. Any size, PNG / JPG / SVG works — square transparent backgrounds or vertical portraits look best.</p>
     </div>
     <h3>${ICONS.mail} Feedback</h3>
     <div class="contact-box">
@@ -3339,7 +3338,7 @@ const TABS: TabDef[] = [
             border:1px solid rgba(245,166,35,0.55);font-size:13px;line-height:1.75">
   <div style="color:#f5a623;font-weight:700;font-size:13.5px;margin-bottom:6px">插件内的音乐板已停止维护</div>
   <div style="color:var(--text)">
-    随项目封盘，<b>插件内嵌</b>的音乐板（侧栏图标 + 配对弹窗 + 后台音频引擎）已下线，不再随插件一起加载，也不会再消耗任何资源。<b>独立的网页版音乐板继续可用</b>，可作为一个普通网页播放器使用，不依赖本插件。
+    <b>插件内嵌</b>的音乐板（侧栏图标 + 配对弹窗 + 后台音频引擎）已退役下线，不再随插件一起加载，也不会再消耗任何资源。<b>独立的网页版音乐板继续可用</b>，可作为一个普通网页播放器使用，不依赖本插件。
   </div>
 </div>
 

@@ -2,6 +2,15 @@
 
 All notable changes to this project follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-08-25
+
+### Changed
+
+- **The DM announcement is shown automatically, once a day, to GMs.** It used to appear only when the megaphone in the cluster row was clicked, so release notes went unread. `background.ts` now opens it on the first load of each LOCAL calendar day — not UTC, because "first time today" should mean the DM's today, not a date that rolls over mid-session. Players never see it: it carries DM-facing notes, and an unprompted modal appearing mid-session for a player would be worse than useless. Deliberately not gated on the announcement version, so it reads like a game's daily patch notes rather than surfacing only when something was published; it still writes the acknowledged-version key, so opening it also stops the megaphone blinking.
+- **The announcement's close button arms after a 3 s progress bar**, and counts down on the label. With the popup now unprompted, an un-gated button gets dismissed by reflex before anyone reads what changed. Reuses the `.auto-progress` bar that had been left inert in the markup since the old auto-close timer was removed, retimed 5 s → 3 s.
+- **Announcement rewritten as patch notes** — plain-language "what's new / what got fixed", in the style of a game changelog, replacing the project-closure notice. Everything listed is a real change drawn from this file. Verified against the parser's own rules before shipping: every section resolves to a known kind, every `issues` row carries a valid type, every `highlights` row has its separator.
+- **Settings → Support: the closure copy is gone.** The paragraphs about the project "nearing its end", heading for 封盘, and thanking everyone for their company no longer describe the project — the suite is a complete, actively maintained toolkit. Replaced with one line on what it actually covers. The support invitation stays, reworded to "如果这个插件真的让你感到惊喜" / "If this plugin genuinely surprised you". The music-board note also stops framing its retirement as part of a project closure, and "下周我会统一收集" becomes "不定期", since that week was months ago.
+
 ## [1.1.11] — 2026-08-20
 
 > Note: 1.0.8 – 1.1.10 shipped without changelog entries; resuming the log here.

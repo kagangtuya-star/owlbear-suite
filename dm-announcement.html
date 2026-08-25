@@ -61,7 +61,9 @@ body {
   height:100%;
   background:linear-gradient(90deg,#f5a623,#5dade2);
   transform-origin:left center;
-  animation:ann-progress 5s linear forwards;
+  /* Counts the 3 s the close button stays disabled. Kept in sync with
+     READ_GATE_MS in src/dm-announcement.ts — change both together. */
+  animation:ann-progress 3s linear forwards;
 }
 .auto-progress.paused .bar{animation-play-state:paused}
 @keyframes ann-progress{from{transform:scaleX(1)}to{transform:scaleX(0)}}
@@ -347,6 +349,14 @@ body {
 }
 .btn:hover { background: var(--accent-dim); }
 .btn:active { transform: translateY(1px); }
+.btn:disabled {
+  background: #2a3242;
+  color: #7d8494;
+  border-color: #39414f;
+  cursor: default;
+}
+.btn:disabled:hover { background: #2a3242; }
+.btn:disabled:active { transform: none; }
 </style>
 </head>
 <body>

@@ -430,15 +430,53 @@ async function loadVersionIntoTitle(): Promise<void> {
   }
 }
 
+/**
+ * How long the close button stays disabled, so the announcement is at
+ * least glanced at rather than dismissed reflexively.
+ *
+ * The bar in dm-announcement.html animates over the same duration —
+ * change both together.
+ */
+const READ_GATE_MS = 3000;
+
+/** Disable "我知道了" and run the progress bar down; then arm it. */
+function startReadGate(): void {
+  const btn = document.getElementById("btn-close") as HTMLButtonElement | null;
+  const bar = document.getElementById("auto-progress");
+  if (!btn) return;
+  const label = btn.textContent ?? "";
+  btn.disabled = true;
+  bar?.classList.add("on");
+
+  const started = Date.now();
+  const tick = () => {
+    const left = READ_GATE_MS - (Date.now() - started);
+    if (left <= 0) {
+      btn.disabled = false;
+      btn.textContent = label;
+      bar?.classList.remove("on");
+      return;
+    }
+    btn.textContent = `${label} (${Math.ceil(left / 1000)})`;
+    window.setTimeout(tick, 200);
+  };
+  tick();
+}
+
 OBR.onReady(() => {
   void loadAndRender();
   void loadVersionIntoTitle();
 
-  // 2026-05-14 — the announcement now ONLY closes via the "我知道了"
-  // button. The previous auto-close timer (?auto=1 → 5 s) and the
-  // Escape-to-close handler were both removed per user request: the
-  // DM should explicitly acknowledge the announcement. The `?auto=1`
-  // URL param + the .auto-progress bar are now inert.
+  // 2026-05-14 — the announcement only closes via the "我知道了" button;
+  // there is no auto-close and no Escape handler, because the DM should
+  // acknowledge it explicitly.
+  //
+  // 2026-08-25 — that button now arms after a 3 s progress bar. The
+  // announcement is shown unprompted once a day (see background.ts), so
+  // without a gate it would be dismissed by reflex before anyone read
+  // what changed.
+  startReadGate();
+
   document.getElementById("btn-close")?.addEventListener("click", async () => {
     try { await OBR.modal.close(MODAL_ID); } catch {}
   });

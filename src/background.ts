@@ -105,9 +105,84 @@ const BC_CLUSTER_ROW_STATE = "com.obr-suite/cluster-row-state";
 const BC_CLUSTER_ROW_OPEN = "com.obr-suite/cluster-row-open";
 
 // DM-only announcement modal. Opened from the megaphone button inside
-// the cluster row (left of the gear); auto-popup-on-scene-ready was
-// removed earlier. Cluster-row blinks the megaphone while there's an
-// unseen announcement.
+// the cluster row (left of the gear), and — since 2026-08-25 — shown
+// automatically the first time a GM loads the suite on any given day.
+// Cluster-row blinks the megaphone while there's an unseen announcement.
+const ANNOUNCE_MODAL_ID = "com.obr-suite/dm-announcement";
+const ANNOUNCE_URL = assetUrl("dm-announcement.html");
+const ANNOUNCE_MD_URL = assetUrl("announcement.md");
+/** YYYY-MM-DD of the last day the announcement auto-opened here. */
+const LS_ANNOUNCE_DAILY = "obr-suite/announce-daily-date";
+/** Version string of the announcement the DM has acknowledged. Shared
+ *  with cluster-row.ts, which uses it to blink the megaphone. */
+const LS_ANNOUNCE_SEEN_VERSION = "obr-suite/announce-seen-version";
+
+/** Local calendar day, not UTC — "first time today" should mean the
+ *  DM's today, not a date that rolls over mid-session in Asia. */
+function localDayStamp(): string {
+  const d = new Date();
+  const m = `${d.getMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getDate()}`.padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/**
+ * Show the announcement once a day, to GMs only.
+ *
+ * Deliberately NOT gated on the announcement version: the point is a
+ * daily "here's what changed" like a game's patch notes, so it shows
+ * again the next day even if nothing was published in between. The
+ * version key is still written, so acknowledging here also stops the
+ * megaphone blinking.
+ *
+ * Players never see it — it carries DM-facing notes, and a modal
+ * appearing unprompted mid-session for a player would be worse than
+ * useless.
+ */
+async function maybeShowDailyAnnouncement(): Promise<void> {
+  try {
+    if ((await OBR.player.getRole()) !== "GM") return;
+  } catch {
+    return;
+  }
+  const today = localDayStamp();
+  try {
+    if (localStorage.getItem(LS_ANNOUNCE_DAILY) === today) return;
+  } catch {
+    // No localStorage (private mode / blocked) — better to skip than to
+    // reopen this on every single load.
+    return;
+  }
+  try {
+    localStorage.setItem(LS_ANNOUNCE_DAILY, today);
+  } catch {}
+
+  // Mark the current announcement acknowledged so the megaphone stops
+  // blinking; failing to read the version is not a reason to skip the
+  // popup.
+  try {
+    const res = await fetch(ANNOUNCE_MD_URL, { cache: "no-cache" });
+    if (res.ok) {
+      const m = (await res.text()).match(
+        /^\s*-\s*(\d+\.\d+\.\d+(?:[-.][\w]+)*)\s*[·\-—]/m,
+      );
+      if (m) localStorage.setItem(LS_ANNOUNCE_SEEN_VERSION, m[1]);
+    }
+  } catch {}
+
+  try {
+    await OBR.modal.open({
+      id: ANNOUNCE_MODAL_ID,
+      url: ANNOUNCE_URL,
+      // Same box the megaphone button opens, so the auto-popup and the
+      // manual open are visually identical.
+      width: 560,
+      height: 580,
+    });
+  } catch (e) {
+    console.warn("[obr-suite] daily announcement failed to open", e);
+  }
+}
 
 // Trigger geometry. Anchored bottom-LEFT so it sits in the lower-left
 // quadrant without competing with the global-search popover (top-right)
@@ -729,6 +804,10 @@ OBR.onReady(async () => {
   // is cheap (just a localStorage read + maybe one popover.open) so
   // we always run it; it's a no-op when the user hasn't enabled it.
   void setupPerfWindow();
+
+  // Patch notes, once a day, GM only. Fire-and-forget so a slow fetch
+  // can't hold up module startup.
+  void maybeShowDailyAnnouncement();
 
   // URL-subscribed homebrew packs — re-fetch every stale subscription
   // (lastFetchedAt older than SUB_STALE_MS) so updates the upstream
