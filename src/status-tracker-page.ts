@@ -36,8 +36,6 @@ import {
   STATUS_BUFFS_KEY,
   STATUS_EFFECTS_ENABLED,
   DEFAULT_BUFFS,
-  DEFAULT_BUFF_RETIRED_IDS,
-  matchesOldDefault,
   BuffDef,
   BuffEffect,
   textColorFor,
@@ -45,6 +43,7 @@ import {
   setStatusRenderMode,
   type StatusRenderMode,
 } from "./modules/statusTracker/types";
+import { DEFAULT_BUFF_RETIRED_IDS } from "./modules/statusTracker/defaultsMigration";
 import { bindPanelDrag } from "./utils/panelDrag";
 import { PANEL_IDS } from "./utils/panelLayout";
 import { t, applyI18nDom } from "./i18n";
@@ -321,10 +320,6 @@ function migrateDefaultsInPlace(
   existing: BuffDef[],
   existingOrder: string[],
 ): { buffs: BuffDef[]; groupOrder: string[] } {
-  // Reference for tooling — matchesOldDefault is now informational
-  // only (the migration is no longer signature-gated) but the export
-  // is kept available for any future diagnostics.
-  void matchesOldDefault;
   // Pass 1: drop every retired-default id.
   const kept = existing.filter((b) => !DEFAULT_BUFF_RETIRED_IDS.has(b.id));
   // Pass 2: append new defaults that aren't already there (by id) AND
