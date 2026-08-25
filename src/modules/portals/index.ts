@@ -15,12 +15,19 @@ import {
   CreatePrefs,
   PortalMeta,
 } from "./types";
-import { t } from "../../i18n";
+// NOT `../../i18n`. This module is on background.ts's boot path, and
+// that file is one ~600-key object literal indexed dynamically, so
+// importing it for three strings put all 46 kB of it in front of every
+// client's startup. See i18n-portal.ts.
+import { PORTAL_I18N } from "../../i18n-portal";
 import { getLocalLang } from "../../state";
 import { assetUrl } from "../../asset-base";
 
 const _lang = () => getLocalLang();
-const _t = (k: Parameters<typeof t>[1]) => t(_lang(), k);
+// Same shape as i18n.ts's `t`, including the `?? key` fallback — do not
+// simplify it to a bare index, or an unexpected language would throw
+// where the original returned the key.
+const _t = (k: keyof typeof PORTAL_I18N) => PORTAL_I18N[k]?.[_lang()] ?? k;
 
 // Portal module — DM draws a circle with the tool, the area becomes a
 // teleport trigger zone marked by an SVG icon at its center. Tokens dragged

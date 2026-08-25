@@ -1,4 +1,5 @@
 import type { Language } from "./state";
+import { PORTAL_I18N } from "./i18n-portal";
 export type { Language } from "./state";
 
 // Translation strings shared across all suite UI. Keep keys flat so it's
@@ -8,6 +9,13 @@ export type { Language } from "./state";
 type Dict = Record<string, { zh: string; en: string }>;
 
 const TR: Dict = {
+  // The portals module needs three of these on the BOOT path, and
+  // pulling this whole file in for them cost every client 46 kB before
+  // startup. They live in their own module now and are spread back in
+  // here, so this is still the one place to look up any suite string.
+  // See i18n-portal.ts.
+  ...PORTAL_I18N,
+
   // Cluster buttons
   btnTimeStop: { zh: "时停", en: "Time Stop" },
   btnFocus: { zh: "同步视口", en: "Sync Viewport" },
@@ -243,8 +251,6 @@ const TR: Dict = {
 
   // === Portals ===
   portalTitle: { zh: "传送门", en: "Portal" },
-  portalToolName: { zh: "传送门", en: "Portal" },
-  portalToolHint: { zh: "画圈创建传送门", en: "Drag to create a portal" },
   portalNew: { zh: "新建传送门", en: "New Portal" },
   portalEdit: { zh: "编辑传送门", en: "Edit Portal" },
   portalLblName: { zh: "名字", en: "Name" },
@@ -262,7 +268,6 @@ const TR: Dict = {
   portalSave: { zh: "保存", en: "Save" },
   portalLockTitle: { zh: "锁定 / 解锁此传送门", en: "Lock / Unlock this portal" },
   portalConfirmDel: { zh: "确定删除该传送门？", en: "Delete this portal?" },
-  portalUnnamed: { zh: "(未命名)", en: "(unnamed)" },
   portalDestSelect: { zh: "选择目的地", en: "Select destination" },
   portalDestUnits: { zh: "个单位", en: "unit(s)" },
   portalDestNoMatch: { zh: "没有同标签的其它传送门", en: "No other portals with the same tag" },
