@@ -40,11 +40,14 @@ import { openingImage } from "../../overlayAssets";
 import {
   COLOR_DOOR_CLOSED,
   COLOR_DOOR_OPEN,
+  COLOR_SECRET_CLOSED,
+  COLOR_SECRET_OPEN,
   COLOR_WINDOW_CLOSED,
   COLOR_WINDOW_OPEN,
   OVERLAY_OPENING_KEY,
+  SECRET_DASH,
 } from "../../ids";
-import type { Opening } from "../../opening/types";
+import { playerVisible, type Opening } from "../../opening/types";
 import { isGM } from "../../runtime";
 
 /** Minimum stroke width for the indicator so a hairline fog shape
@@ -55,7 +58,16 @@ export function openingColor(opening: Opening): string {
   if (opening.kind === "window") {
     return opening.open ? COLOR_WINDOW_OPEN : COLOR_WINDOW_CLOSED;
   }
+  if (opening.kind === "secret") {
+    return opening.open ? COLOR_SECRET_OPEN : COLOR_SECRET_CLOSED;
+  }
   return opening.open ? COLOR_DOOR_OPEN : COLOR_DOOR_CLOSED;
+}
+
+/** Secret doors get a dashed indicator so the GM can tell one from a
+ *  door the party can actually see, at a glance and colour-blind-safe. */
+function openingDash(opening: Opening): number[] {
+  return opening.kind === "secret" ? SECRET_DASH : [];
 }
 
 interface OverlayEntry {
@@ -72,6 +84,7 @@ interface Visual {
   /** Billboard position, in world space. */
   centre: Vector2;
   color: string;
+  dash: number[];
 }
 
 export class OpeningOverlayActor extends Actor {
@@ -128,8 +141,13 @@ export class OpeningOverlayActor extends Actor {
       (parent as any).style?.strokeWidth ?? 0,
     );
 
+    const gm = isGM();
     const visuals: Visual[] = [];
     for (const opening of openings) {
+      // A secret door is invisible to players, full stop: no indicator
+      // means nothing to click, nothing to hover, and nothing in the
+      // local scene for a curious player to find in the DOM.
+      if (!gm && !playerVisible(opening)) continue;
       const poly = polylines[opening.polyIndex];
       if (!poly) continue;
       const t1 = Math.min(opening.t1, opening.t2);
@@ -142,6 +160,7 @@ export class OpeningOverlayActor extends Actor {
         commands: polylineToCommands(local),
         centre: transformPoint(matrix, centreLocal),
         color: openingColor(opening),
+        dash: openingDash(opening),
       });
     }
 
@@ -182,6 +201,7 @@ export class OpeningOverlayActor extends Actor {
             item.commands = visual.commands;
             item.style.strokeColor = visual.color;
             item.style.strokeWidth = strokeWidth;
+            item.style.strokeDash = visual.dash;
           }
         },
       ],
@@ -212,6 +232,7 @@ export class OpeningOverlayActor extends Actor {
       .strokeColor(visual.color)
       .strokeOpacity(1)
       .strokeWidth(strokeWidth)
+      .strokeDash(visual.dash)
       .layer(layer as any)
       .attachedTo(parent.id)
       .position(parent.position)

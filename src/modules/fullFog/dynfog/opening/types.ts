@@ -1,29 +1,43 @@
-// Openings — doors and windows carved out of a fog wall.
+// Openings — doors, secret doors and windows carved out of a fog wall.
 //
 // Stored as an array on the FOG-layer Drawing they belong to, under
 // `OPENINGS_KEY`. Because the array lives in the SHARED scene it
 // propagates to every client for free; each client then re-derives its
 // own local Wall items from it.
 //
-// Semantics (both kinds share one rule — `open === true` means the wall
-// segment is removed, i.e. vision passes):
+// === Semantics ========================================================
 //
-//   door    default closed (blocks vision), red → green when opened
-//   window  default open   (see-through),   cyan → grey when shuttered
+// `open` means "a creature can pass through". Whether VISION passes is
+// a separate question answered by `blocksVision`:
 //
-// Owlbear `Wall` items only affect VISION, never movement, so "you can
-// see through a window but not walk through it" isn't expressible. A
-// window is therefore "a normally-open, separately-styled opening that
-// can be shuttered", which is the closest useful thing.
+//   kind      open=true                     open=false
+//   ────────  ────────────────────────────  ────────────────────────────
+//   door      wall removed, vision passes   wall intact, vision blocked
+//   secret    wall removed, vision passes   wall intact, vision blocked
+//   window    wall removed, vision passes   wall removed, vision passes
+//
+// A window is glass: shut or not, you can see through it. That is the
+// whole point of a window, and it's why `blocksVision` exists rather
+// than the code testing `!open` directly. Owlbear's `Wall` items only
+// affect VISION and never movement, so the "shut window still can't be
+// climbed through" half of the rule is carried by the indicator's
+// colour and icon and enforced at the table, not by the engine — see
+// docs/DYNAMIC_FOG_PARITY.md.
+//
+// A SECRET door behaves exactly like a door for vision, but players
+// never see its indicator and can never operate it: `playerVisible`
+// gates the overlay, and the GM-side toggle listener re-checks it so a
+// hand-rolled broadcast can't flip one either.
 
-export type OpeningKind = "door" | "window";
+export type OpeningKind = "door" | "window" | "secret";
 
 export interface Opening {
   /** Stable id. Player toggle requests reference this rather than an
    *  array index, so a concurrent delete can't flip the wrong door. */
   id: string;
   kind: OpeningKind;
-  /** true ⇒ this stretch of wall is removed (vision passes). */
+  /** true ⇒ a creature can pass. See the table above for what that
+   *  does (or doesn't) do to vision. */
   open: boolean;
   /** Index into `drawingToPolylines(drawing)`. */
   polyIndex: number;
@@ -33,9 +47,51 @@ export interface Opening {
   t2: number;
 }
 
-/** Default `open` for a freshly created opening of each kind. */
-export function defaultOpenState(kind: OpeningKind): boolean {
-  return kind === "window";
+/**
+ * Does this opening still block line of sight?
+ *
+ * The single source of truth for wall derivation (`wallGeometry`), the
+ * cross-shape cut geometry (`OpeningActor`) and anything else that asks
+ * "is there a hole here". Windows are never blocking.
+ */
+export function blocksVision(opening: Opening): boolean {
+  if (opening.kind === "window") return false;
+  return !opening.open;
+}
+
+/** The complement of `blocksVision` — this opening removes its stretch
+ *  of wall. Named separately because that is what the geometry code is
+ *  actually asking. */
+export function cutsWall(opening: Opening): boolean {
+  return !blocksVision(opening);
+}
+
+/** May a non-GM client see this opening's indicator and operate it? */
+export function playerVisible(opening: Opening): boolean {
+  return opening.kind !== "secret";
+}
+
+/** Default `open` for a freshly created opening of each kind.
+ *
+ *  Windows default to SHUT: a window in a wall is normally glazed and
+ *  closed, and since a shut window is see-through anyway the default
+ *  costs no visibility. Doors and secret doors default to shut too. */
+export function defaultOpenState(_kind: OpeningKind): boolean {
+  return false;
+}
+
+/** Labels for the two states, which differ per kind — a shut door is
+ *  "closed", a shut window is "glazed". Used by tooltips / settings. */
+export function stateLabel(
+  kind: OpeningKind,
+  open: boolean,
+  en: boolean,
+): string {
+  if (kind === "window") {
+    if (open) return en ? "Open (passable)" : "敞开（可通行）";
+    return en ? "Glazed (see-through)" : "玻璃（可视，不可通行）";
+  }
+  return open ? (en ? "Open" : "打开") : en ? "Closed" : "关闭";
 }
 
 let idCounter = 0;

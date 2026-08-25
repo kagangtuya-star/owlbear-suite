@@ -13,7 +13,7 @@ import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import { OPENINGS_KEY } from "../ids";
 import { isDrawing, drawingToPolylines } from "../geom/drawing";
 import { UPSTREAM_DOORS_KEY, readOpenings, serialiseOpenings } from "./read";
-import type { Opening } from "./types";
+import { playerVisible, type Opening } from "./types";
 
 function currentOpenings(item: Item): Opening[] {
   // Upstream's shape stores ABSOLUTE arc length, so converting it needs
@@ -77,6 +77,39 @@ export async function setOpeningState(
     });
     return changed ? next : null;
   });
+}
+
+/**
+ * Apply a toggle a PLAYER asked for.
+ *
+ * Runs on the GM's client, from the broadcast listener. Identical to
+ * `setOpeningState` except it refuses openings a player is not allowed
+ * to see — a secret door. The player's client never draws an indicator
+ * for one, so this only matters against a hand-rolled broadcast, but
+ * "the client hides it" is not a permission check and this is where the
+ * permission actually lives.
+ *
+ * @returns true when the opening was changed.
+ */
+export async function applyPlayerOpeningState(
+  itemId: string,
+  openingId: string,
+  open: boolean,
+): Promise<boolean> {
+  let applied = false;
+  await editOpenings(itemId, (openings) => {
+    let changed = false;
+    const next = openings.map((o) => {
+      if (o.id !== openingId) return o;
+      if (!playerVisible(o)) return o;
+      if (o.open === open) return o;
+      changed = true;
+      return { ...o, open };
+    });
+    applied = changed;
+    return changed ? next : null;
+  });
+  return applied;
 }
 
 export async function deleteOpening(

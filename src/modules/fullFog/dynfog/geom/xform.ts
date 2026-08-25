@@ -11,6 +11,12 @@ export function itemMatrix(item: Item): Matrix {
   return MathM.fromItem(item);
 }
 
+/** The do-nothing transform, for actors that have not seen a parent
+ *  yet. `MathM` has no `identity()`, so build it from a zero item. */
+export function identityMatrix(): Matrix {
+  return MathM.fromPosition({ x: 0, y: 0 });
+}
+
 /** item-local point → world point. */
 export function transformPoint(matrix: Matrix, point: Vector2): Vector2 {
   const p = MathM.fromPosition(point);

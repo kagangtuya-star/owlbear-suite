@@ -21,7 +21,12 @@ import { setupBubbles, teardownBubbles } from "./modules/bubbles";
 import { setupStatusTracker, teardownStatusTracker } from "./modules/statusTracker";
 import { setupHpBar, teardownHpBar } from "./modules/hpBar";
 import { setupMetadataInspector, teardownMetadataInspector } from "./modules/metadata-inspector";
-import { setupFullFog, teardownFullFog } from "./modules/fullFog";
+import {
+  setupDynamicFog,
+  setupFogEditor,
+  teardownDynamicFog,
+  teardownFogEditor,
+} from "./modules/fullFog";
 import { setupMusicBoard, teardownMusicBoard } from "./modules/musicBoard";
 import { setupTransform, teardownTransform } from "./modules/transform";
 import { setupCrossSceneCards } from "./modules/cross-scene-cards";
@@ -596,15 +601,22 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
   // runs and no popover / audio engine / PeerJS pairing starts. The
   // web tool at obr.dnd.center/studio/music-studio/ still works
   // standalone; the settings page links there.
-  // 2026-05-26 — fullFog promoted to stable. 2026-08-25 — its body
-  // gates only the dynfog AUTHORING surface (light context menu,
-  // fog-tool line/door/window modes, door indicators, player toggle
-  // tool) behind !STABLE_HIDES. Stable ships the map-fog editor plus
-  // the wall engine that turns the editor's output into vision
-  // blocking; dev additionally gets the authoring tools.
-  fullFog: {
-    setup: async () => { await setupFullFog(); },
-    teardown: async () => { await teardownFullFog(); },
+  // 2026-08-25 — `fullFog` split into two independently switchable
+  // modules. `fogEditor` is the right-click map tracer and has no
+  // runtime; `dynamicFog` is the engine that turns FOG-layer drawings
+  // into per-client walls and owns doors / windows / lights. The
+  // engine's AUTHORING surface (light context menu, fog-tool modes,
+  // indicators, player toggle tool, occlusion, darkvision) is gated
+  // behind !STABLE_HIDES inside the module; the wall derivation
+  // itself runs in both channels, because the editor's output is
+  // worthless without it. See modules/fullFog/index.ts.
+  fogEditor: {
+    setup: async () => { await setupFogEditor(); },
+    teardown: async () => { await teardownFogEditor(); },
+  },
+  dynamicFog: {
+    setup: async () => { await setupDynamicFog(); },
+    teardown: async () => { await teardownDynamicFog(); },
   },
   // Transform (变身) — stable: right-click CHARACTER token, pick a
   // bestiary form, swap image + bestiary/bubbles metadata, and revert

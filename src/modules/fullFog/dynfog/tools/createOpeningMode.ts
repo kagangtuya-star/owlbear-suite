@@ -1,4 +1,4 @@
-// 门 / 窗 modes under Owlbear's fog tool (GM only).
+// 门 / 窗 / 密门 modes under Owlbear's fog tool (GM only).
 //
 // Behaviour matches upstream's door tool:
 //   hover  → an orange dot marks where on the wall you'd start
@@ -8,10 +8,14 @@
 //   alt-click / double-click → delete it
 //   click a light billboard → select that light
 //
-// Two differences from upstream, both deliberate:
+// Three differences from upstream, all deliberate:
 //   1. Snapping searches every fog drawing rather than requiring the
 //      pointer to be over `event.target` — see `snap.ts`.
-//   2. A second mode creates WINDOWS, which default to open.
+//   2. A WINDOW mode. A window never blocks vision, open or shut, so
+//      its toggle carries only the "can a creature pass" half.
+//   3. A SECRET DOOR mode. Identical to a door for vision, but its
+//      indicator is never built on a player's client and the GM-side
+//      toggle listener refuses player requests against one.
 
 import OBR, {
   buildPath,
@@ -28,13 +32,14 @@ import type { Reconciler } from "../reconcile/Reconciler";
 import { OpeningReactor } from "../reconcile/reactors/OpeningReactor";
 import { subPolyline } from "../geom/polyline";
 import { findWallSnap, type WallSnap } from "./snap";
-import { ICON_DOOR, ICON_WINDOW } from "../overlayAssets";
+import { ICON_DOOR, ICON_SECRET, ICON_WINDOW } from "../overlayAssets";
 import {
   COLOR_CONTROL,
   DOOR_MODE_ID,
   LIGHT_OVERLAY_KEY,
   OBR_FOG_TOOL,
   OVERLAY_OPENING_KEY,
+  SECRET_MODE_ID,
   WINDOW_MODE_ID,
 } from "../ids";
 import {
@@ -142,15 +147,39 @@ async function clearControls() {
   }
 }
 
+/** Per-kind toolbar identity. Shortcuts O / I / U don't collide with
+ *  the suite's other tools (Shift+A, CapsLock, K, BracketRight); O is
+ *  upstream dynamic-fog's door shortcut. */
+const MODE_SPEC: Record<
+  OpeningKind,
+  (en: boolean) => { id: string; label: string; icon: string; shortcut: string }
+> = {
+  door: (en) => ({
+    id: DOOR_MODE_ID,
+    label: en ? "Door" : "门",
+    icon: ICON_DOOR,
+    shortcut: "O",
+  }),
+  window: (en) => ({
+    id: WINDOW_MODE_ID,
+    label: en ? "Window" : "窗户",
+    icon: ICON_WINDOW,
+    shortcut: "I",
+  }),
+  secret: (en) => ({
+    id: SECRET_MODE_ID,
+    label: en ? "Secret door" : "密门",
+    icon: ICON_SECRET,
+    shortcut: "U",
+  }),
+};
+
 export function createOpeningMode(
   reconciler: Reconciler,
   kind: OpeningKind,
 ): Promise<void> {
   const en = getLocalLang() === "en";
-  const id = kind === "window" ? WINDOW_MODE_ID : DOOR_MODE_ID;
-  const label =
-    kind === "window" ? (en ? "Window" : "窗户") : en ? "Door" : "门";
-  const icon = kind === "window" ? ICON_WINDOW : ICON_DOOR;
+  const { id, label, icon, shortcut } = MODE_SPEC[kind](en);
 
   /** Sub-polyline between two t values on the drag target, in the
    *  parent's local space. */
@@ -369,12 +398,12 @@ export function createOpeningMode(
       { cursor: "crosshair", filter: {} },
     ],
 
-    shortcut: kind === "window" ? "I" : "O",
+    shortcut,
   });
 }
 
 export async function removeOpeningModes(): Promise<void> {
-  for (const id of [DOOR_MODE_ID, WINDOW_MODE_ID]) {
+  for (const id of [DOOR_MODE_ID, WINDOW_MODE_ID, SECRET_MODE_ID]) {
     try {
       await OBR.tool.removeMode(id);
     } catch {}

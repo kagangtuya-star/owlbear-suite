@@ -1,6 +1,6 @@
 // Port of upstream `WallReactor`.
 
-import type { Item } from "@owlbear-rodeo/sdk";
+import type { Item, Vector2 } from "@owlbear-rodeo/sdk";
 import { Reactor } from "../Reactor";
 import type { Reconciler } from "../Reconciler";
 import { WallActor } from "../actors/WallActor";
@@ -21,6 +21,29 @@ export class WallReactor extends Reactor {
 
   filter(item: Item): boolean {
     return isFogDrawing(item);
+  }
+
+  /** Every wall polyline in the scene, in WORLD space — the input to
+   *  `light/occlusion.ts`'s line-of-sight index. */
+  worldPolylines(): Vector2[][] {
+    const out: Vector2[][] = [];
+    for (const actor of this.actors.values()) {
+      if (actor instanceof WallActor) out.push(...actor.worldPolylines());
+    }
+    return out;
+  }
+
+  /** Changes whenever any actor's emitted geometry changes, so the
+   *  occlusion index knows when it has to be rebuilt. */
+  geometrySignature(): string {
+    const parts: string[] = [];
+    for (const [id, actor] of this.actors) {
+      if (actor instanceof WallActor) {
+        parts.push(`${id}=${actor.geometrySignature}`);
+      }
+    }
+    parts.sort();
+    return parts.join("&");
   }
 
   diff(a: Item, b: Item): boolean {

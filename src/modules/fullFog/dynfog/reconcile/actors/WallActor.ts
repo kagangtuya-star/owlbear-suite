@@ -11,6 +11,7 @@ import {
   buildWall,
   isWall,
   type Item,
+  type Matrix,
   type Vector2,
   type Wall,
 } from "@owlbear-rodeo/sdk";
@@ -20,9 +21,11 @@ import { isDrawing, type Drawing } from "../../geom/drawing";
 import { deriveWallPolylines, expandContours } from "../../geom/wallGeometry";
 import type { Cut } from "../../geom/cut";
 import {
+  identityMatrix,
   inverseTransformPoint,
   itemMatrix,
   matrixScaleFactor,
+  transformPoint,
 } from "../../geom/xform";
 import { OpeningReactor } from "../reactors/OpeningReactor";
 import {
@@ -38,6 +41,13 @@ export class WallActor extends Actor {
   /** Inputs hash of the last emitted geometry — skips redundant work
    *  when an unrelated fog item changes. */
   private signature = "";
+  /** The polylines currently emitted as Wall items, in the parent's
+   *  LOCAL space, plus the transform that puts them in world space.
+   *  Read by `light/occlusion.ts` to build its line-of-sight index —
+   *  it must see exactly the geometry Owlbear is blocking light with,
+   *  including every door that is currently open. */
+  private derived: Vector2[][] = [];
+  private derivedMatrix: Matrix = identityMatrix();
   /** Memoised 墙体外扩 result — see `expandedContours`. */
   private expandedCache: { key: string; polys: Vector2[][] } | null = null;
 
@@ -51,6 +61,8 @@ export class WallActor extends Actor {
     if (isDrawing(parent)) {
       const polylines = this.computePolylines(parent);
       this.signature = this.computeSignature(parent);
+      this.derived = polylines;
+      this.derivedMatrix = itemMatrix(parent);
       const items = polylines.map((p) => this.polylineToWall(parent, p));
       this.walls = items.map((i) => i.id);
       if (items.length > 0) this.reconciler.patcher.addItems(...items);
@@ -62,7 +74,25 @@ export class WallActor extends Actor {
       this.reconciler.patcher.deleteItems(...this.walls);
     }
     this.walls = [];
+    this.derived = [];
     this.expandedCache = null;
+  }
+
+  /** What this actor currently blocks vision with, in WORLD space.
+   *  Recomputed on demand rather than cached, because the only caller
+   *  rebuilds its index just as rarely as this geometry changes. */
+  worldPolylines(): Vector2[][] {
+    if (this.derived.length === 0) return [];
+    const matrix = this.derivedMatrix;
+    return this.derived.map((poly) =>
+      poly.map((p) => transformPoint(matrix, p)),
+    );
+  }
+
+  /** Cheap "has anything I emit changed" token, for cache invalidation
+   *  in consumers. */
+  get geometrySignature(): string {
+    return this.signature;
   }
 
   update(parent: Item): void {
@@ -73,6 +103,8 @@ export class WallActor extends Actor {
 
     const prev = this.walls;
     const next = this.computePolylines(parent);
+    this.derived = next;
+    this.derivedMatrix = itemMatrix(parent);
 
     if (prev.length < next.length) {
       for (let i = prev.length; i < next.length; i++) {

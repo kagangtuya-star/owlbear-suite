@@ -16,6 +16,15 @@ export class LightReactor extends Reactor {
   filter(item: Item): boolean {
     return LIGHT_KEY in item.metadata;
   }
+
+  /** Every live light, for the occlusion pass. */
+  getActors(): LightActor[] {
+    const out: LightActor[] = [];
+    for (const actor of this.actors.values()) {
+      if (actor instanceof LightActor) out.push(actor);
+    }
+    return out;
+  }
 }
 
 export class SelfLightReactor extends Reactor {
@@ -35,5 +44,13 @@ export class SelfLightReactor extends Reactor {
       config.outerAngle !== 360 &&
       (config.lightType === "PRIMARY" || config.lightType === undefined)
     );
+  }
+
+  getActors(): SelfLightActor[] {
+    const out: SelfLightActor[] = [];
+    for (const actor of this.actors.values()) {
+      if (actor instanceof SelfLightActor) out.push(actor);
+    }
+    return out;
   }
 }

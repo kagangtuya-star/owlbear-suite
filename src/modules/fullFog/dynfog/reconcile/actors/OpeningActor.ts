@@ -14,7 +14,7 @@ import { itemMatrix, matrixScaleFactor, transformPoint } from "../../geom/xform"
 import { pointAtT, subPolyline } from "../../geom/polyline";
 import { bboxOf, type BBox, type Cut } from "../../geom/cut";
 import { openingsSignature, readOpenings } from "../../opening/read";
-import type { Opening } from "../../opening/types";
+import { cutsWall, type Opening } from "../../opening/types";
 
 /** Extra half-width added to a cut so it reliably clears the wall it is
  *  supposed to open, even when the two shapes only roughly align.
@@ -75,11 +75,13 @@ export class OpeningActor extends Actor {
     this.cuts = this.buildCuts(drawing);
   }
 
-  /** World-space capsule chains for every OPEN opening on this drawing.
+  /** World-space capsule chains for every opening on this drawing that
+   *  currently REMOVES its stretch of wall — every open door / secret
+   *  door, and every window regardless of its shutter state.
    *  Foreign drawings subtract these so a door on a shared wall opens
    *  both overlapping fog shapes. */
   private buildCuts(drawing: Drawing): Cut[] {
-    const open = this.openings.filter((o) => o.open);
+    const open = this.openings.filter(cutsWall);
     if (open.length === 0) return [];
 
     const matrix = itemMatrix(drawing);

@@ -20,7 +20,9 @@ import { type Opening, type OpeningKind } from "./types";
 export const UPSTREAM_DOORS_KEY = "rodeo.owlbear.dynamic-fog/doors";
 
 function asKind(value: unknown): OpeningKind {
-  return value === "window" ? "window" : "door";
+  if (value === "window") return "window";
+  if (value === "secret") return "secret";
+  return "door";
 }
 
 function clamp01(n: number): number {

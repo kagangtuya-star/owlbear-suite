@@ -50,6 +50,7 @@ export const OBR_FOG_TOOL = "rodeo.owlbear.tool/fog";
 export const LINE_MODE_ID = dynfogId("line-mode");
 export const DOOR_MODE_ID = dynfogId("door-mode");
 export const WINDOW_MODE_ID = dynfogId("window-mode");
+export const SECRET_MODE_ID = dynfogId("secret-mode");
 
 /** Standalone player-facing toolbar tool + its single mode. */
 export const TOGGLE_TOOL_ID = dynfogId("toggle-tool");
@@ -81,12 +82,22 @@ export interface ToggleRequest {
 
 // --- palette (matches upstream dynamic-fog) ---------------------------------
 
+// Colour encodes the OPEN state, not the vision state: green = a
+// creature can pass. Windows are see-through either way, so their shut
+// colour is glass-cyan rather than a "blocked" red.
 export const COLOR_DOOR_CLOSED = "#ff4d4d";
 export const COLOR_DOOR_OPEN = "#85ff66";
-/** Window shutters open (see-through) — cyan reads as "glass". */
-export const COLOR_WINDOW_OPEN = "#5dade2";
-/** Window shuttered (blocks vision). */
-export const COLOR_WINDOW_CLOSED = "#8fa6b5";
+/** Window shut — glazed. Still see-through; cyan reads as "glass". */
+export const COLOR_WINDOW_CLOSED = "#5dade2";
+/** Window swung open — see-through AND passable. */
+export const COLOR_WINDOW_OPEN = "#66ffd9";
+/** Secret door, undiscovered. Purple + a dashed stroke, so the GM can
+ *  never mistake one for a door the party can actually see. */
+export const COLOR_SECRET_CLOSED = "#b06bff";
+/** Secret door, swung open. */
+export const COLOR_SECRET_OPEN = "#d8a6ff";
+/** Dash pattern applied to secret-door indicators only. */
+export const SECRET_DASH: number[] = [14, 10];
 /** Snap indicator / in-progress drag — upstream's orange. */
 export const COLOR_CONTROL = "#ff7433";
 

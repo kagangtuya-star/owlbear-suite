@@ -16,6 +16,7 @@ import { ICON_TOGGLE } from "../overlayAssets";
 import { OVERLAY_OPENING_KEY, TOGGLE_MODE_ID, TOGGLE_TOOL_ID } from "../ids";
 import { isGM } from "../runtime";
 import { setOpeningState } from "../opening/mutate";
+import { playerVisible } from "../opening/types";
 import { requestOpeningState } from "./toggleChannel";
 import type { Reconciler } from "../reconcile/Reconciler";
 import { OpeningReactor } from "../reconcile/reactors/OpeningReactor";
@@ -39,11 +40,21 @@ export async function createToggleTool(
   if (registered) return;
   const en = getLocalLang() === "en";
 
-  /** Current state of an opening, from this client's own cache. */
+  /**
+   * Current state of an opening, from this client's own cache.
+   *
+   * Returns null for anything this client may not operate, which for a
+   * player includes secret doors. A player never gets an indicator for
+   * one so there is nothing to click, but the opening IS in the shared
+   * metadata their client caches — this keeps the tool from acting on
+   * it if some other path ever surfaces it.
+   */
   function currentState(itemId: string, openingId: string): boolean | null {
     const actor = reconciler?.find(OpeningReactor)?.getActor(itemId);
     const opening = actor?.openings.find((o) => o.id === openingId);
-    return opening ? opening.open : null;
+    if (!opening) return null;
+    if (!isGM() && !playerVisible(opening)) return null;
+    return opening.open;
   }
 
   try {

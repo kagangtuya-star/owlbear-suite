@@ -9,7 +9,7 @@ import type { Vector2 } from "@owlbear-rodeo/sdk";
 import { remapT, splitPolylineByRanges, type TRange } from "./polyline";
 import { cutRangesForPolyline, type Cut } from "./cut";
 import { safeWallOffset } from "../../output/wallOffset";
-import type { Opening } from "../opening/types";
+import { cutsWall, type Opening } from "../opening/types";
 
 export interface WallDerivationInput {
   /** Contours in the drawing's local space, from `drawingToPolylines`. */
@@ -101,7 +101,7 @@ export function deriveWallPolylines(
 
     const ranges: TRange[] = [];
     for (const opening of openings) {
-      if (!opening.open || opening.polyIndex !== pi) continue;
+      if (!cutsWall(opening) || opening.polyIndex !== pi) continue;
       const source = raw[pi];
       if (offsetApplied && source) {
         ranges.push({

@@ -23,7 +23,12 @@ import {
 import { bboxOf, cutRangesForPolyline, type Cut } from "./geom/cut";
 import { deriveWallPolylines, expandContours } from "./geom/wallGeometry";
 import { readOpenings } from "./opening/read";
-import type { Opening } from "./opening/types";
+import {
+  blocksVision,
+  playerVisible,
+  type Opening,
+  type OpeningKind,
+} from "./opening/types";
 
 export interface TestResult {
   name: string;
@@ -394,8 +399,9 @@ export function runDynfogSelfTest(): TestResult[] {
   }
 
   {
-    // Windows default to open, so a freshly placed one is see-through
-    // and a shuttered one blocks — the mirror image of a door.
+    // A window is glass: shut or open, you can see through it. Both
+    // states must punch the same hole in the wall — the open/shut flag
+    // says whether a creature can pass, which Owlbear cannot express.
     const openWindow = deriveWallPolylines({
       polylines: rectPolys,
       openings: [door({ kind: "window", open: true })],
@@ -406,11 +412,62 @@ export function runDynfogSelfTest(): TestResult[] {
       openings: [door({ kind: "window", open: false })],
       foreignCuts: [],
     });
+    const openLen = openWindow.reduce((s, p) => s + polylineLength(p), 0);
+    const shutLen = shutWindow.reduce((s, p) => s + polylineLength(p), 0);
     check(
-      "windows follow the same open ⇒ see-through rule as doors",
-      openWindow.length === 2 && shutWindow.length === 1,
-      `open=${openWindow.length} shut=${shutWindow.length}`,
+      "a window is see-through in BOTH states",
+      openWindow.length === 2 &&
+        shutWindow.length === 2 &&
+        near(openLen, shutLen, 1e-9) &&
+        near(openLen, 280, 1e-6),
+      `open=${openWindow.length}/${openLen} shut=${shutWindow.length}/${shutLen}`,
     );
+  }
+
+  {
+    // A secret door is a door for every geometric purpose. What makes
+    // it secret lives in the overlay + the GM-side toggle listener,
+    // not here.
+    const shut = deriveWallPolylines({
+      polylines: rectPolys,
+      openings: [door({ kind: "secret", open: false })],
+      foreignCuts: [],
+    });
+    const ajar = deriveWallPolylines({
+      polylines: rectPolys,
+      openings: [door({ kind: "secret", open: true })],
+      foreignCuts: [],
+    });
+    check(
+      "a secret door blocks like a door when shut and opens like one",
+      shut.length === 1 && ajar.length === 2,
+      `shut=${shut.length} ajar=${ajar.length}`,
+    );
+  }
+
+  {
+    // The three predicates that encode the whole table in
+    // opening/types.ts, asserted directly so a future refactor of the
+    // geometry can't quietly change the rules.
+    const cases: Array<[OpeningKind, boolean, boolean, boolean]> = [
+      // kind, open, expected blocksVision, expected playerVisible
+      ["door", false, true, true],
+      ["door", true, false, true],
+      ["secret", false, true, false],
+      ["secret", true, false, false],
+      ["window", false, false, true],
+      ["window", true, false, true],
+    ];
+    let ok = true;
+    let detail = "";
+    for (const [kind, open, wantBlock, wantVisible] of cases) {
+      const o = door({ kind, open });
+      if (blocksVision(o) !== wantBlock || playerVisible(o) !== wantVisible) {
+        ok = false;
+        detail += ` ${kind}/${open}`;
+      }
+    }
+    check("opening semantics table holds", ok, detail);
   }
 
   {

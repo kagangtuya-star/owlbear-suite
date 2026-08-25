@@ -3245,81 +3245,35 @@ const TABS: TabDef[] = [
     },
   },
   {
-    id: "fullFog",
-    zh: `${ICONS.eye} 地图迷雾`,
-    en: `${ICONS.eye} Map Fog`,
-    moduleId: "fullFog",
+    id: "fogEditor",
+    zh: `${ICONS.eye} 迷雾编辑器`,
+    en: `${ICONS.eye} Fog Editor`,
+    moduleId: "fogEditor",
     body: {
       zh: `<h3>地图迷雾编辑器</h3>
-<p>右键 MAP 图层的地图图片 → <b>编辑地图迷雾</b> → 全屏编辑器。整体思路接近 Photoshop 的<b>阈值/曲线 + 选区 + 画笔</b>工作流，目标是把地图上的墙体 / 障碍物提取成几何数据。</p>
-<h4 style="margin-top:14px">自动算法</h4>
-<ul>
-  <li><b>灰度阈值</b>：T 滑块手动控制，最直观</li>
-  <li><b>Otsu 自动</b>：算法自动选最佳全局阈值，适合室内地图</li>
-  <li><b>自适应 Gaussian</b>：每个像素跟邻域比，光照不均也准</li>
-  <li><b>颜色距离</b>：取色器选目标色 + 容差，默认黑色</li>
-  <li><b>颜色排除（HSV）</b>：自动排除饱和绿色（森林）/ 棕色（小路），保留暗低饱和（线稿），适合手绘地图</li>
-  <li><b>饱和度感知</b>：暗色 AND 低饱和度才识别（线稿专用）</li>
-</ul>
-<h4 style="margin-top:10px">手动工具</h4>
-<ul>
-  <li><b>画笔 / 橡皮</b>：直接增减 mask</li>
-  <li><b>套索 / 多边形 / 矩形</b>：圈选区域填充</li>
-  <li><b>魔棒</b>：点击图像，选中相邻颜色相近的所有像素</li>
-  <li><b>油漆桶</b>：在 mask 内 floodFill，常用于把空心矩形墙的内部填实</li>
-  <li><b>取色器</b>：拾取像素颜色给颜色距离算法用</li>
-</ul>
-<h4 style="margin-top:10px">清理 / 后处理</h4>
-<ul>
-  <li><b>开运算</b>：去毛刺、断细噪</li>
-  <li><b>闭运算</b>：连接断点</li>
-  <li><b>面积过滤</b>：删除小于 N 像素的连通块</li>
-  <li><b>选择性填洞</b>：只填面积小于阈值的封闭区域，避免把整张图填满</li>
-</ul>
-<h4 style="margin-top:10px">输出</h4>
-<p>保存后生成<b>单个 Path item</b>（多 subpath，evenodd fillRule），attached 到地图，跟随地图缩放/位移/旋转。低 drawcall，未来可作为视野计算的几何源。</p>
-<p style="color:var(--text-dim);font-size:11.5px">编辑器在稳定版与测试版都可用；下面的门 / 窗 / 光源工具目前仅测试版（dev）可见。</p>`,
+<p>右键 MAP 图层的地图图片 → <b>编辑地图迷雾</b> → 全屏编辑器，把地图上画出来的墙描成几何数据。工作流接近 Photoshop 的<b>阈值 + 选区 + 画笔</b>：六种自动算法起手（灰度阈值 / Otsu / 自适应 Gaussian / 颜色距离 / 颜色排除 HSV / 饱和度感知），画笔、套索、魔棒、油漆桶手工修补，开闭运算与面积过滤收尾。</p>
+<p>保存后生成<b>单个 Path item</b>（多 subpath、evenodd、attached 到地图），跟随地图缩放 / 位移 / 旋转。每个工具的详细说明在编辑器里悬停即可看到。</p>
+<p style="color:var(--text-dim);font-size:11.5px">本模块<b>只有编辑器本身</b>，没有任何常驻逻辑。关掉它不会让已经描好的迷雾失效 —— 让迷雾真正挡住视线的是「动态迷雾」模块。</p>`,
       en: `<h3>Map Fog Editor</h3>
-<p>Right-click a MAP-layer image → <b>Edit Map Fog</b> → fullscreen editor. Workflow is roughly Photoshop's <b>threshold/curves + selection + brush</b> applied to map images, aimed at extracting walls / obstacles as geometry data.</p>
-<h4 style="margin-top:14px">Auto algorithms</h4>
-<ul>
-  <li><b>Grayscale threshold</b>: manual T slider, most predictable</li>
-  <li><b>Otsu</b>: auto-picks the best global T; great for indoor maps</li>
-  <li><b>Adaptive Gaussian</b>: per-pixel neighborhood compare; handles uneven illumination</li>
-  <li><b>Color distance</b>: pick target color + tolerance; defaults to black</li>
-  <li><b>Color exclude (HSV)</b>: drops saturated green (forest) / brown (paths), keeps dark low-saturation pixels — designed for hand-drawn maps</li>
-  <li><b>Saturation-aware</b>: dark AND low-saturation only — for line-art maps</li>
-</ul>
-<h4 style="margin-top:10px">Manual tools</h4>
-<ul>
-  <li><b>Brush / Eraser</b>: direct mask edits</li>
-  <li><b>Lasso / Polygon / Rectangle</b>: enclose region and fill</li>
-  <li><b>Magic wand</b>: click image, selects all adjacent same-color pixels</li>
-  <li><b>Paint bucket</b>: floodFill on the mask — fills hollow wall rectangles</li>
-  <li><b>Picker</b>: pick a pixel color to feed the color-distance algorithm</li>
-</ul>
-<h4 style="margin-top:10px">Refinement</h4>
-<ul>
-  <li><b>Open</b>: removes thin noise</li>
-  <li><b>Close</b>: bridges small gaps</li>
-  <li><b>Area filter</b>: drops connected components below threshold</li>
-  <li><b>Selective hole-fill</b>: fills only enclosed regions below an area cap, so the whole-map background isn't filled</li>
-</ul>
-<h4 style="margin-top:10px">Output</h4>
-<p>Saves as a <b>single Path item</b> (multi-subpath, evenodd fillRule), attached to the map, follows scale / translation / rotation. Low drawcall, ready for future vision-cone calculation.</p>
-<p style="color:var(--text-dim);font-size:11.5px">The editor ships in both channels; the door / window / light tools below are dev-channel only for now.</p>`,
+<p>Right-click a MAP-layer image → <b>Edit Map Fog</b> → fullscreen editor, which traces the walls drawn on the map into geometry. The workflow is Photoshop's <b>threshold + selection + brush</b>: six auto algorithms to start (grayscale threshold / Otsu / adaptive Gaussian / colour distance / colour exclude HSV / saturation-aware), then brush, lasso, magic wand and paint bucket by hand, then open/close morphology and area filtering to clean up.</p>
+<p>Saves as a <b>single Path item</b> (multi-subpath, evenodd, attached to the map) that follows the map's scale / translation / rotation. Every tool documents itself on hover inside the editor.</p>
+<p style="color:var(--text-dim);font-size:11.5px">This module is the editor and nothing else — it has no runtime. Turning it off does not invalidate fog it already traced; what makes fog actually block vision is the <b>Dynamic Fog</b> module.</p>`,
     },
+  },
+  {
+    id: "dynamicFog",
+    zh: `${ICONS.eye} 动态迷雾`,
+    en: `${ICONS.eye} Dynamic Fog`,
+    moduleId: "dynamicFog",
     dynamicBody: (lang) => {
       const s = getState();
       const zh = lang === "zh";
-      // `body` above is rendered first by renderContent(); this block is
-      // appended after it, so don't repeat it here.
       return `
         <h3>${zh ? "动态迷雾（墙 / 门 / 窗 / 光源）" : "Dynamic Fog (walls · doors · windows · lights)"}</h3>
         <p>${
           zh
-            ? "迷雾工具画出的<b>任何</b> FOG 图层图形（矩形 / 圆 / 曲线 / 直线 / Path），以及迷雾编辑器自动描出的轮廓，都会在每个客户端生成原生 <b>Wall</b>，用来遮挡视线。选中 OBR 的迷雾工具后可以看到三个新模式："
-            : "<b>Every</b> FOG-layer shape the fog tool draws (rectangle / circle / curve / line / path), plus the outline the fog editor traces, becomes native <b>Wall</b> items on each client and blocks vision. Selecting Owlbear's fog tool reveals three new modes:"
+            ? "迷雾工具画出的<b>任何</b> FOG 图层图形（矩形 / 圆 / 曲线 / 直线 / Path），以及迷雾编辑器自动描出的轮廓，都会在每个客户端生成原生 <b>Wall</b>，用来遮挡视线。选中 OBR 的迷雾工具后可以看到四个新模式："
+            : "<b>Every</b> FOG-layer shape the fog tool draws (rectangle / circle / curve / line / path), plus the outline the fog editor traces, becomes native <b>Wall</b> items on each client and blocks vision. Selecting Owlbear's fog tool reveals four new modes:"
         }</p>
         <ul>
           <li><b>${zh ? "直线墙" : "Line"}</b>${zh ? "：拖出一段直墙，方便在上面挂门窗。" : ": drag a straight wall segment to hang openings on."}</li>
@@ -3330,15 +3284,19 @@ const TABS: TabDef[] = [
           }</li>
           <li><b>${zh ? "窗户（快捷键 I）" : "Window (shortcut I)"}</b>${
             zh
-              ? "：同样的拖动方式，但默认<span style=\"color:#5dade2\">通透</span>（可视）。点击可"
-                + "「拉上百叶」变成挡视线的灰蓝色。"
-              : ": same gesture, but defaults to <span style=\"color:#5dade2\">see-through</span>. Click to shutter it (grey-blue, blocks vision)."
+              ? "：同样的拖动方式。窗户<b>无论开关都能看见外面</b> —— 关着是<span style=\"color:#5dade2\">玻璃（青色）</span>，开着是<span style=\"color:#66ffd9\">敞开（蓝绿）</span>，两种状态挖出的洞完全一样。开 / 关表达的是「能不能<b>钻过去</b>」。"
+              : ": same gesture. A window is see-through in BOTH states — <span style=\"color:#5dade2\">glazed (cyan)</span> when shut, <span style=\"color:#66ffd9\">open (aqua)</span> when swung out, and the hole it cuts is identical either way. The toggle says whether a creature can <b>pass</b>, not whether you can see."
+          }</li>
+          <li><b>${zh ? "密门（快捷键 U）" : "Secret door (shortcut U)"}</b>${
+            zh
+              ? "：视线上和普通门完全一样，但<b>玩家端不会生成任何指示器</b>，玩家也无法开关它（DM 端会二次校验，伪造广播同样无效）。DM 看到的是<span style=\"color:#b06bff\">紫色虚线</span>。"
+              : ": identical to a door for vision, but <b>no indicator is ever built on a player's client</b> and a player cannot operate one (the GM re-checks, so a hand-rolled broadcast fails too). The GM sees a <span style=\"color:#b06bff\">dashed purple</span> marker."
           }</li>
         </ul>
         <p style="color:var(--text-dim);font-size:11.5px">${
           zh
-            ? "注：OBR 的墙只影响<b>视线</b>，不影响<b>移动</b>，所以「能看不能走」在引擎层面无法表达 —— 窗户是「默认常开、可关闭、颜色图标与门区分」的开口。"
-            : "Note: Owlbear walls affect VISION only, never movement, so \"see through but can't walk through\" isn't expressible. A window is a normally-open, separately-styled, shutterable opening."
+            ? "注：OBR 的墙只影响<b>视线</b>，不影响<b>移动</b>，所以「关着的窗爬不过去」这一半在引擎层面无法强制，只能靠指示器颜色 / 图标传达、由桌面约定。密门的元数据存在共享场景里（OBR 没有仅 DM 可读的存储），玩家翻元数据理论上能发现它 —— 但游戏画面里没有任何可见痕迹。"
+            : "Note: Owlbear walls affect VISION only, never movement, so the \"you can't climb through a shut window\" half can't be enforced by the engine — the indicator's colour and icon carry it and the table honours it. Secret-door metadata lives in the shared scene (Owlbear has no GM-only storage), so a player digging through raw metadata could find one — but nothing in the rendered game gives it away."
         }</p>
         <p style="color:var(--text-dim);font-size:11.5px">${
           zh
@@ -3349,8 +3307,13 @@ const TABS: TabDef[] = [
         <h4 style="margin-top:12px">${zh ? "光源" : "Lights"}</h4>
         <p>${
           zh
-            ? "右键任意图片或圆形 → <b>添加光源</b>，再右键 → <b>光源设置</b> 调整照明范围 / 角度（全向或锥形）/ 边缘（硬或柔）/ 类型（主光源或次光源）。锥形光源会额外获得一圈自照明，持灯人不会站在自己的暗区里。次光源只照亮已经被主光源看到的区域 —— 敌人营地的篝火设成次光源，队伍看到之前不会提前暴露。光源由原生引擎渲染，会被墙遮挡、能穿过打开的门窗。"
-            : "Right-click any image or circle → <b>Add Light</b>, then right-click → <b>Light Settings</b> for range / angle (full or cone) / edge (hard or soft) / type (primary or secondary). Cone lights get a small self light so the bearer isn't standing in their own dark spot. A secondary light only lights fog a primary light can already see. Lights are rendered by Owlbear's own engine, so walls clip them and open doors let them through."
+            ? "右键任意图片或圆形 → <b>添加光源</b>，再右键 → <b>光源设置</b> 调整照明范围 / 角度（全向或锥形）/ 边缘（硬或柔）/ 类型（主光源或次光源）。锥形光源会额外获得一圈自照明，持灯人不会站在自己的暗区里。光源由原生引擎渲染，会被墙遮挡、能穿过打开的门窗。"
+            : "Right-click any image or circle → <b>Add Light</b>, then right-click → <b>Light Settings</b> for range / angle (full or cone) / edge (hard or soft) / type (primary or secondary). Cone lights get a small self light so the bearer isn't standing in their own dark spot. Lights are rendered by Owlbear's own engine, so walls clip them and open doors let them through."
+        }</p>
+        <p>${
+          zh
+            ? "光源设置里另有两个本套件特有的开关：<b>环境光</b>（这盏灯对所有人永远可见，用于墙上的火把、天光这类固定照明，不参与下面的遮挡判定）和<b>黑暗视觉 · 彩色半径</b>（半径内正常色调，半径外到照明边缘转为黑白 —— D&amp;D 的暗视）。"
+            : "Light Settings also carries two switches that are ours, not upstream's: <b>Ambient</b> (this light is always visible to everyone — for fixed lighting like wall sconces or daylight — and is exempt from the occlusion rule below) and <b>Darkvision colour radius</b> (full colour inside the radius, greyscale from there out to the edge of the light — D&amp;D darkvision)."
         }</p>
 
         <h3 style="margin-top:14px">${zh ? "选项" : "Options"}</h3>
@@ -3370,8 +3333,8 @@ const TABS: TabDef[] = [
             ${zh ? "玩家可开关门窗" : "Players Can Work Doors"}
             <div class="desc">${
               zh
-                ? "默认开启。仅 DM 可设。开启后玩家会看到门窗指示器，并在工具栏获得「开关门窗」工具，点一下就能开关；指示器画在迷雾<b>下方</b>，没探索到的区域不会提前泄露门的位置。关闭后玩家既看不到指示器也没有该工具，门窗只能由 DM 操作。"
-                : "On by default. DM-only setting. When on, players see the door/window indicators and get a 「开关门窗」 toolbar tool to flip them. Indicators render BELOW the fog, so undiscovered doors don't leak the floor plan. When off, players get neither the indicators nor the tool and only the DM can work the doors."
+                ? "默认开启。仅 DM 可设。开启后玩家会看到门窗指示器，并在工具栏获得「开关门窗」工具，点一下就能开关；指示器画在迷雾<b>下方</b>，没探索到的区域不会提前泄露门的位置。关闭后玩家既看不到指示器也没有该工具，门窗只能由 DM 操作。<b>密门永远不受这个开关影响</b>，玩家在任何情况下都看不到、开不了。"
+                : "On by default. DM-only setting. When on, players see the door/window indicators and get a toolbar tool to flip them. Indicators render BELOW the fog, so undiscovered doors don't leak the floor plan. When off, players get neither the indicators nor the tool and only the DM can work the doors. <b>Secret doors ignore this switch entirely</b> — players never see or operate one under any setting."
             }</div>
           </div>
           <button class="tog ${
@@ -3393,6 +3356,36 @@ const TABS: TabDef[] = [
             s.fogDoorOverlayAlways ? "on" : ""
           }" data-key="fogDoorOverlayAlways" type="button" ${isGM ? "" : "disabled"} aria-pressed="${
             s.fogDoorOverlayAlways
+          }"></button>
+        </div>
+        <div class="row">
+          <div class="lbl">
+            ${zh ? "光源遮挡（玩家看不见别人的灯）" : "Light Occlusion"}
+            <div class="desc">${
+              zh
+                ? "默认开启。玩家<b>不拥有</b>的光源（DM 放的 NPC 火把等）默认不可见；只有当玩家自己某盏灯到那盏灯之间<b>没有墙阻挡</b>时，它才会亮起来。只看有没有墙、不看距离 —— 空旷野地上的远处火堆是看得见的。判定不传递：一串火把会随着你逐个获得视线依次点亮。标记为<b>环境光</b>的光源不受影响，DM 永远看到全部。<br>⚠ 副作用：身上一盏灯都没有的玩家，除环境光外什么光源都看不到。固定照明记得勾「环境光」。"
+                : "On by default. Lights a player does NOT own (the DM's NPC torches and so on) are hidden; one becomes visible only when a straight line from one of that player's own lights reaches it <b>without crossing a wall</b>. Walls only — distance is not part of it, so a distant campfire across open ground is visible. It is not transitive: a row of torches lights up one at a time as you gain line of sight to each. Lights flagged <b>Ambient</b> are exempt, and the DM is never occluded.<br>⚠ Side effect: a player carrying no light of their own sees no lights except ambient ones. Flag fixed lighting as Ambient."
+            }</div>
+          </div>
+          <button class="tog ${
+            s.fogLightOcclusion ? "on" : ""
+          }" data-key="fogLightOcclusion" type="button" ${isGM ? "" : "disabled"} aria-pressed="${
+            s.fogLightOcclusion
+          }"></button>
+        </div>
+        <div class="row">
+          <div class="lbl">
+            ${zh ? "DM 也应用黑暗视觉" : "Apply Darkvision To The DM"}
+            <div class="desc">${
+              zh
+                ? "默认关闭。黑暗视觉的去色环<b>只对自己拥有的 token</b> 生效，而 DM 拥有场景里几乎所有 NPC —— 照章办事会把大半张地图变成黑白。开启后 DM 端也会渲染，用来预览玩家实际看到的效果。"
+                : "Off by default. The darkvision greyscale ring only applies to tokens you own, and the DM owns nearly every NPC in the scene — honouring it for them would drain the colour out of most of the map. Turn it on to preview what a player with darkvision actually sees."
+            }</div>
+          </div>
+          <button class="tog ${
+            s.fogDarkvisionForGM ? "on" : ""
+          }" data-key="fogDarkvisionForGM" type="button" ${isGM ? "" : "disabled"} aria-pressed="${
+            s.fogDarkvisionForGM
           }"></button>
         </div>
         ${!isGM ? `<p class="role-notice">${zh ? "玩家端只读 · 由 DM 设置" : "Read-only · Set by DM"}</p>` : ""}
@@ -3441,24 +3434,30 @@ const TABS: TabDef[] = [
             await OBR.scene.fog.setFilled(next);
             paint(next);
           } catch (e) {
-            console.warn("[fullFog] toggle fog fill failed", e);
+            console.warn("[dynamicFog] toggle fog fill failed", e);
           }
         });
       }
-      root
-        .querySelector<HTMLButtonElement>('.tog[data-key="fogPlayerDoors"]')
-        ?.addEventListener("click", async () => {
-          if (!isGM) return;
-          await setState({ fogPlayerDoors: !getState().fogPlayerDoors });
-        });
-      root
-        .querySelector<HTMLButtonElement>('.tog[data-key="fogDoorOverlayAlways"]')
-        ?.addEventListener("click", async () => {
-          if (!isGM) return;
-          await setState({
-            fogDoorOverlayAlways: !getState().fogDoorOverlayAlways,
+      // Four booleans that all live in suite state and all flip the same
+      // way — one binder rather than four copies of the same handler.
+      const bind = (
+        key:
+          | "fogPlayerDoors"
+          | "fogDoorOverlayAlways"
+          | "fogLightOcclusion"
+          | "fogDarkvisionForGM",
+      ) => {
+        root
+          .querySelector<HTMLButtonElement>(`.tog[data-key="${key}"]`)
+          ?.addEventListener("click", async () => {
+            if (!isGM) return;
+            await setState({ [key]: !getState()[key] });
           });
-        });
+      };
+      bind("fogPlayerDoors");
+      bind("fogDoorOverlayAlways");
+      bind("fogLightOcclusion");
+      bind("fogDarkvisionForGM");
     },
   },
   {
@@ -3732,10 +3731,15 @@ const TABS: TabDef[] = [
 ];
 
 // Stable channel hides modules still in dev; dev keeps them visible.
-// 2026-05-14 — `follow` is now hidden EVERYWHERE (retired from the
-// dev build per user request); only `fullFog` remains dev-only.
+// 2026-05-14 — `follow` is hidden EVERYWHERE (retired from the dev
+// build per user request).
+// 2026-08-25 — `fullFog` split into `fogEditor` + `dynamicFog`. The
+// EDITOR ships in both channels (it has since 2026-05-26); the ENGINE
+// tab is dev-only for now, matching the `authoring` gate in
+// modules/fullFog/index.ts. The engine still RUNS on stable — only its
+// settings tab and its authoring tools are withheld there.
 const HIDDEN_TAB_IDS = new Set<string>(
-  STABLE_HIDES ? ["fullFog", "follow"] : ["follow"],
+  STABLE_HIDES ? ["dynamicFog", "follow"] : ["follow"],
 );
 const VISIBLE_TABS = TABS.filter((t) => !HIDDEN_TAB_IDS.has(t.id));
 
@@ -3768,7 +3772,9 @@ function moduleLabelKey(id: ModuleId): string {
     case "resourceTracker": return lang === "zh" ? "资源追踪" : "Resource Tracker";
     case "hpBar": return lang === "zh" ? "小血条组件" : "HP Bar";
     case "metadataInspector": return lang === "zh" ? "元数据检查" : "Metadata Inspector";
-    case "fullFog": return lang === "zh" ? "迷雾编辑" : "Fog Editor";
+    case "fullFog": return lang === "zh" ? "迷雾（已拆分）" : "Fog (retired)";
+    case "fogEditor": return lang === "zh" ? "迷雾编辑器" : "Fog Editor";
+    case "dynamicFog": return lang === "zh" ? "动态迷雾" : "Dynamic Fog";
     case "trickster": return lang === "zh" ? "捣蛋鬼在哪？" : "Trickster Marker";
     case "circleImage": return lang === "zh" ? "圆形图片" : "Circle Image";
     case "follow": return lang === "zh" ? "跟随" : "Follow";

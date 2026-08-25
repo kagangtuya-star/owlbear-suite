@@ -10,6 +10,16 @@
 //   lightType          PRIMARY casts + reveals; SECONDARY only lights
 //                      fog a PRIMARY light already sees
 //   rotation           cone direction, DEGREES relative to the parent
+//
+// Two fields are ours, not upstream's:
+//
+//   ambient            exempt from wall occlusion — every client always
+//                      renders it. For fixed room lighting (sconces,
+//                      braziers, daylight) that the party is meant to
+//                      see whether or not they carry a torch.
+//   colorRadius        darkvision: world px inside which colour
+//                      survives. Beyond it, out to attenuationRadius,
+//                      the view is desaturated. 0 / absent = off.
 
 import type { LightType } from "@owlbear-rodeo/sdk";
 
@@ -21,6 +31,8 @@ export interface LightConfig {
   outerAngle?: number;
   lightType?: LightType;
   rotation?: number;
+  ambient?: boolean;
+  colorRadius?: number;
 }
 
 /** Grid cells of range a freshly added light gets (6 cells = 30 ft on
@@ -57,6 +69,8 @@ export function withDefaults(
     outerAngle: 360,
     lightType: "PRIMARY",
     rotation: 0,
+    ambient: false,
+    colorRadius: 0,
     ...config,
   };
 }
@@ -86,6 +100,11 @@ export function normaliseLightConfig(raw: unknown): LightConfig | null {
   if (outerAngle !== undefined) out.outerAngle = outerAngle;
   const rotation = num("rotation");
   if (rotation !== undefined) out.rotation = rotation;
+  const colorRadius = num("colorRadius");
+  if (colorRadius !== undefined && colorRadius >= 0) {
+    out.colorRadius = colorRadius;
+  }
+  if (typeof src.ambient === "boolean") out.ambient = src.ambient;
   const lightType = src.lightType;
   if (
     lightType === "PRIMARY" ||

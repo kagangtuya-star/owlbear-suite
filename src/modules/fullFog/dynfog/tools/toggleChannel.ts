@@ -9,10 +9,14 @@
 // The request carries the DESIRED state rather than "flip it", because
 // every GM client in the room receives the broadcast and a flip applied
 // twice would cancel itself out.
+//
+// Two things are enforced GM-side and cannot be bypassed from a player
+// client: the "players may open doors" setting, and the rule that a
+// SECRET door is not a player-operable opening.
 
 import OBR from "@owlbear-rodeo/sdk";
 import { BC_TOGGLE_OPENING, type ToggleRequest } from "../ids";
-import { setOpeningState } from "../opening/mutate";
+import { applyPlayerOpeningState } from "../opening/mutate";
 import { getPlayerOpeningsEnabled, isGM } from "../runtime";
 
 let unsubscribe: (() => void) | null = null;
@@ -49,7 +53,9 @@ export function startToggleListener(): void {
       ) {
         return;
       }
-      await setOpeningState(data.itemId, data.openingId, data.open);
+      // `applyPlayerOpeningState` — not `setOpeningState` — so a
+      // hand-rolled broadcast can't work a secret door.
+      await applyPlayerOpeningState(data.itemId, data.openingId, data.open);
     });
   } catch (e) {
     console.warn("[dynfog] toggle listener failed", e);

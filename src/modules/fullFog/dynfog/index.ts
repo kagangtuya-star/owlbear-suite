@@ -17,6 +17,8 @@ import {
   LightReactor,
   SelfLightReactor,
 } from "./reconcile/reactors/LightReactor";
+import { DarkvisionReactor } from "./reconcile/reactors/DarkvisionReactor";
+import { LightOcclusion } from "./light/occlusion";
 import { initOverlay, syncOverlays, teardownOverlay } from "./overlay";
 import { createLineMode, removeLineMode } from "./tools/createLineMode";
 import {
@@ -34,6 +36,8 @@ import {
   isGM,
   refreshRuntime,
   setAlwaysShowOverlay,
+  setDarkvisionForGM,
+  setLightOcclusionEnabled,
   setPlayerOpeningsEnabled,
   setSceneDpi,
 } from "./runtime";
@@ -43,6 +47,11 @@ export interface DynfogOptions {
   playerOpenings: boolean;
   /** GM keeps their indicators visible without the fog tool. */
   alwaysShowOverlay: boolean;
+  /** Hide other people's lights unless a wall-free sight line reaches
+   *  them from one of your own. See `light/occlusion.ts`. */
+  lightOcclusion: boolean;
+  /** Apply the darkvision desaturation on the GM's screen too. */
+  darkvisionForGM: boolean;
   /**
    * Register the AUTHORING surface — light context menu, the fog-tool
    * line/door/window modes, the indicator overlays and the player
@@ -57,6 +66,7 @@ export interface DynfogOptions {
 }
 
 let reconciler: Reconciler | null = null;
+let occlusion: LightOcclusion | null = null;
 let started = false;
 let authoring = false;
 const subscriptions: Array<() => void> = [];
@@ -73,6 +83,7 @@ async function syncGmTools(): Promise<void> {
       if (reconciler) {
         await createOpeningMode(reconciler, "door");
         await createOpeningMode(reconciler, "window");
+        await createOpeningMode(reconciler, "secret");
       }
     } catch (e) {
       console.warn("[dynfog] GM tool registration failed", e);
@@ -102,9 +113,15 @@ export async function applyDynfogSettings(
   authoring = options.authoring;
   const a = setPlayerOpeningsEnabled(options.playerOpenings);
   const b = setAlwaysShowOverlay(options.alwaysShowOverlay);
+  // Both of these change what the reactors should be producing, not
+  // just how they look, so they need a full refresh rather than an
+  // overlay resync: occlusion re-allows every light it had hidden, and
+  // the darkvision reactor's filter answers differently.
+  const c = setLightOcclusionEnabled(options.lightOcclusion);
+  const d = setDarkvisionForGM(options.darkvisionForGM);
   await syncGmTools();
   await syncToggleTool();
-  if ((a || b) && reconciler && authoring) {
+  if ((a || b || c || d) && reconciler && authoring) {
     syncOverlays(reconciler);
     reconciler.refresh();
   }
@@ -120,6 +137,8 @@ export async function setupDynfog(options: DynfogOptions): Promise<void> {
 
   setPlayerOpeningsEnabled(options.playerOpenings);
   setAlwaysShowOverlay(options.alwaysShowOverlay);
+  setLightOcclusionEnabled(options.lightOcclusion);
+  setDarkvisionForGM(options.darkvisionForGM);
   await refreshRuntime();
 
   reconciler = new Reconciler();
@@ -128,6 +147,13 @@ export async function setupDynfog(options: DynfogOptions): Promise<void> {
   if (authoring) {
     reconciler.register(new LightReactor(reconciler));
     reconciler.register(new SelfLightReactor(reconciler));
+    reconciler.register(new DarkvisionReactor(reconciler));
+    // Occlusion runs after every reactor has settled, so it reads the
+    // walls and the light positions from the SAME pass.
+    occlusion = new LightOcclusion(reconciler);
+    subscriptions.push(
+      reconciler.onAfterReconcile(() => occlusion?.run()),
+    );
     await initOverlay(reconciler);
     startToggleListener();
   }
@@ -194,6 +220,9 @@ export async function teardownDynfog(): Promise<void> {
     await removeLineMode();
     await removeOpeningModes();
   }
+
+  occlusion?.reset();
+  occlusion = null;
 
   if (reconciler) {
     teardownOverlay(reconciler);

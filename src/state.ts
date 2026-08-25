@@ -31,6 +31,8 @@ export type ModuleId =
   | "hpBar"
   | "metadataInspector"
   | "fullFog"
+  | "fogEditor"
+  | "dynamicFog"
   | "trickster"
   | "circleImage"
   | "follow"
@@ -138,6 +140,17 @@ export interface SuiteState {
   // when the fog tool is not the active tool. Upstream only shows them
   // with the fog tool selected; some GMs prefer them pinned.
   fogDoorOverlayAlways: boolean;
+  // 2026-08-25 — light occlusion. When ON, a player only sees a light
+  // they don't own if a wall-free straight line reaches it from one of
+  // their own lights, so an NPC's torch two rooms away stays dark.
+  // Lights flagged "ambient" in Light Settings are always visible, for
+  // fixed room lighting. GMs are never occluded. Default ON.
+  fogLightOcclusion: boolean;
+  // 2026-08-25 — apply the darkvision desaturation ring on the GM's
+  // screen too. Off by default: the GM owns every NPC, so honouring it
+  // for them would grey out most of the map. Turn it on to preview
+  // what a player with darkvision sees.
+  fogDarkvisionForGM: boolean;
   libraries: LibraryConfig[];
 }
 
@@ -192,17 +205,27 @@ export const DEFAULT_STATE: SuiteState = {
     // DM-only inspection tool. Default ON in all channels; useful for
     // field debugging token / scene / room metadata.
     metadataInspector: true,
-    // fullFog — Photoshop-style fog/wall extraction editor for map
-    // images. Right-click MAP layer → fullscreen modal → algorithms
-    // (Otsu / adaptive / color-exclude / saturation-aware / threshold)
-    // + manual tools (brush / eraser / lasso / wand / bucket) → save
-    // as a single low-drawcall Path item attached to the map.
-    // 2026-05-26 — promoted to stable. 2026-08-25 — setupFullFog()
-    // now gates only the dynfog AUTHORING surface (light menu,
-    // fog-tool line/door/window modes, indicators, player toggle
-    // tool) on !STABLE_HIDES. The wall engine itself runs in both
-    // channels: without it the editor's saved outline blocks nothing.
-    fullFog: true,
+    // fullFog — RETIRED as a module id on 2026-08-25, split into the
+    // two below. The flag stays in the type and the state shape so a
+    // room that stored it doesn't fail to parse, but nothing is
+    // registered against it in background.ts and no settings card
+    // binds to it. Do not reuse.
+    fullFog: false,
+    // Map fog editor. Right-click a MAP-layer image → fullscreen modal
+    // → algorithms (Otsu / adaptive / color-exclude / saturation-aware
+    // / threshold) + manual tools (brush / eraser / lasso / wand /
+    // bucket) → saves a single low-drawcall Path item attached to the
+    // map. Nothing but the editor: turning it off leaves any fog it
+    // already produced working, because the walls come from the module
+    // below. Default ON.
+    fogEditor: true,
+    // Dynamic fog engine (dynfog) — the port of
+    // owlbear-rodeo/dynamic-fog. Turns EVERY FOG-layer drawing into
+    // per-client Wall items, owns doors / secret doors / windows,
+    // lights, light occlusion and darkvision. This is what makes fog
+    // block vision at all, so it is separately switchable from the
+    // editor above but on by default. See modules/fullFog/dynfog/.
+    dynamicFog: true,
     // Trickster — DM-placed circular trigger zone. When a target
     // token drag-commits into the zone, fires a one-shot time stop
     // + camera focus on the entering token. Useful for ambush
@@ -248,6 +271,8 @@ export const DEFAULT_STATE: SuiteState = {
   crossSceneSyncCards: false,
   fogPlayerDoors: true,
   fogDoorOverlayAlways: false,
+  fogLightOcclusion: true,
+  fogDarkvisionForGM: false,
   libraries: DEFAULT_LIBRARIES,
 };
 
@@ -299,16 +324,24 @@ function merge(partial: any): SuiteState {
       if (!seen.has(def.id)) libraries.unshift(def);
     }
   }
-  // 2026-05-26 — fullFog migration: stable users upgrading from a
-  // previous build (where fullFog defaulted to false) will have
-  // `fullFog: false` baked into their stored room metadata. The
-  // promotion to stable changes the default to true, but the spread
-  // below would let the stored false override the new default and
-  // leave the right-click "编辑地图迷雾" menu missing. Hard-pin
-  // fullFog ON during state load so it always reflects the new
-  // default, while still letting the user toggle other modules.
+  // 2026-08-25 — the `fullFog` module split into `fogEditor` +
+  // `dynamicFog`. Stored room metadata only knows the old id, and the
+  // spread below would leave the two new ones at their defaults, which
+  // is right for everyone EXCEPT a room that had deliberately turned
+  // fog off. Carry that one decision across, once: if the room stored
+  // `fullFog: false` and has never seen the new ids, start both off.
+  // `fullFog` itself is pinned off — nothing registers against it.
   const mergedEnabled = { ...DEFAULT_STATE.enabled, ...(partial.enabled ?? {}) };
-  mergedEnabled.fullFog = true;
+  const storedEnabled = (partial.enabled ?? {}) as Record<string, unknown>;
+  if (
+    storedEnabled.fullFog === false &&
+    storedEnabled.fogEditor === undefined &&
+    storedEnabled.dynamicFog === undefined
+  ) {
+    mergedEnabled.fogEditor = false;
+    mergedEnabled.dynamicFog = false;
+  }
+  mergedEnabled.fullFog = false;
   return {
     enabled: mergedEnabled,
     dataVersion: partial.dataVersion ?? DEFAULT_STATE.dataVersion,
@@ -335,6 +368,10 @@ function merge(partial: any): SuiteState {
     fogPlayerDoors: partial.fogPlayerDoors ?? DEFAULT_STATE.fogPlayerDoors,
     fogDoorOverlayAlways:
       partial.fogDoorOverlayAlways ?? DEFAULT_STATE.fogDoorOverlayAlways,
+    fogLightOcclusion:
+      partial.fogLightOcclusion ?? DEFAULT_STATE.fogLightOcclusion,
+    fogDarkvisionForGM:
+      partial.fogDarkvisionForGM ?? DEFAULT_STATE.fogDarkvisionForGM,
     libraries,
   };
 }
@@ -355,6 +392,8 @@ function suiteStateEqual(a: SuiteState, b: SuiteState): boolean {
   if (a.crossSceneSyncCards !== b.crossSceneSyncCards) return false;
   if (a.fogPlayerDoors !== b.fogPlayerDoors) return false;
   if (a.fogDoorOverlayAlways !== b.fogDoorOverlayAlways) return false;
+  if (a.fogLightOcclusion !== b.fogLightOcclusion) return false;
+  if (a.fogDarkvisionForGM !== b.fogDarkvisionForGM) return false;
   for (const k of Object.keys(a.enabled) as ModuleId[]) {
     if (a.enabled[k] !== b.enabled[k]) return false;
   }
@@ -445,11 +484,11 @@ export function onStateChange(fn: (s: SuiteState) => void): () => void {
 // but we don't gate here — the UI hides write controls for non-GM users.
 export async function setState(partial: Partial<SuiteState>): Promise<void> {
   const prev = cached;
-  // 2026-05-26 — mirror the hard-pin in getState() / migrate path:
-  // fullFog is always ON regardless of any partial update that might
-  // try to flip it off (e.g. a stale UI toggle on an upgraded room).
+  // Mirror the retirement in merge(): `fullFog` is a dead id, never
+  // written back as enabled. Its replacements (`fogEditor`,
+  // `dynamicFog`) are ordinary user-toggleable modules.
   const mergedEnabled = { ...cached.enabled, ...(partial.enabled ?? {}) };
-  mergedEnabled.fullFog = true;
+  mergedEnabled.fullFog = false;
   const next: SuiteState = {
     ...cached,
     ...partial,

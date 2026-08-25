@@ -19,6 +19,12 @@ export class Reconciler {
    *  without an async round-trip. */
   private currentItems: Map<string, Item> = new Map();
   private subscriptions: VoidFunction[] = [];
+  /** Run after every reactor has processed a pass but BEFORE the
+   *  patcher flushes, so a hook can still stage local-scene changes in
+   *  the same batch. Used by `light/occlusion.ts`, which needs the
+   *  wall + light actors to be up to date before it can decide which
+   *  lights this client may see. */
+  private afterHooks: Array<() => void> = [];
 
   patcher: Patcher = new Patcher();
 
@@ -30,6 +36,15 @@ export class Reconciler {
     );
   }
 
+  /** @returns an unsubscribe function. */
+  onAfterReconcile(hook: () => void): () => void {
+    this.afterHooks.push(hook);
+    return () => {
+      const index = this.afterHooks.indexOf(hook);
+      if (index >= 0) this.afterHooks.splice(index, 1);
+    };
+  }
+
   delete() {
     for (const unsubscribe of this.subscriptions) {
       try {
@@ -37,6 +52,7 @@ export class Reconciler {
       } catch {}
     }
     this.subscriptions = [];
+    this.afterHooks = [];
     for (const reactor of this.reactors) reactor.delete();
     this.reactors = [];
     this.prevItems.clear();
@@ -65,6 +81,13 @@ export class Reconciler {
 
     for (const reactor of this.reactors) {
       this.processReactor(reactor, items);
+    }
+    for (const hook of this.afterHooks) {
+      try {
+        hook();
+      } catch (e) {
+        console.warn("[dynfog] after-reconcile hook failed", e);
+      }
     }
     void this.patcher.submitChanges();
 

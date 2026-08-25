@@ -15,6 +15,13 @@ let playerId = "";
 let playerOpenings = true;
 /** GM setting: show the GM's indicators even without the fog tool. */
 let alwaysShowOverlay = false;
+/** GM setting: hide other people's lights unless a wall-free sight line
+ *  reaches them from one of your own. See `light/occlusion.ts`. */
+let lightOcclusion = true;
+/** GM setting: apply the darkvision desaturation on the GM's screen
+ *  too. Off by default — the GM is meant to see the whole map in
+ *  colour; this is for previewing what a player gets. */
+let darkvisionForGM = false;
 
 export function getSceneDpi(): number {
   return sceneDpi;
@@ -33,6 +40,12 @@ export function getPlayerOpeningsEnabled(): boolean {
 }
 export function getAlwaysShowOverlay(): boolean {
   return alwaysShowOverlay;
+}
+export function getLightOcclusionEnabled(): boolean {
+  return lightOcclusion;
+}
+export function getDarkvisionForGM(): boolean {
+  return darkvisionForGM;
 }
 
 /** @returns true when the value actually changed. */
@@ -64,6 +77,18 @@ export function setPlayerOpeningsEnabled(value: boolean): boolean {
 export function setAlwaysShowOverlay(value: boolean): boolean {
   if (alwaysShowOverlay === value) return false;
   alwaysShowOverlay = value;
+  return true;
+}
+
+export function setLightOcclusionEnabled(value: boolean): boolean {
+  if (lightOcclusion === value) return false;
+  lightOcclusion = value;
+  return true;
+}
+
+export function setDarkvisionForGM(value: boolean): boolean {
+  if (darkvisionForGM === value) return false;
+  darkvisionForGM = value;
   return true;
 }
 
