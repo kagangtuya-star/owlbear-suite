@@ -15,6 +15,16 @@
 // parent; tool events still hit locked items, which is how both the
 // GM's door mode and the player's toggle tool click them.
 //
+// Only the BILLBOARD is clickable. The indicator line is `disableHit`,
+// so a click near a door lands on the button or on nothing — dragging
+// out a new opening along an existing one used to get swallowed by the
+// old one's line, and on a thick fog stroke the line is a much bigger
+// target than the button it is supposed to sit under.
+//
+// Both items carry explicit zIndexes with auto-zIndex off, because the
+// line's stroke width is the parent fog shape's, which on a traced map
+// is wide enough to bury the billboard completely.
+//
 // Entries are keyed by `Opening.id` and patched in place, so toggling a
 // door recolours it rather than deleting and re-adding the billboard
 // (upstream keys by array index, which mismatches billboard and path
@@ -47,12 +57,23 @@ import {
   OVERLAY_OPENING_KEY,
   SECRET_DASH,
 } from "../../ids";
-import { playerVisible, type Opening } from "../../opening/types";
+import {
+  playerOperable,
+  playerVisible,
+  type Opening,
+} from "../../opening/types";
 import { isGM } from "../../runtime";
 
 /** Minimum stroke width for the indicator so a hairline fog shape
  *  still produces something clickable. */
 const MIN_STROKE = 8;
+
+/** Above `Date.now()`, which is what the fog tool stamps onto ordinary
+ *  drawings — otherwise the indicators sort under the map's own
+ *  scribbles on the player-side DRAWING layer. */
+const Z_LINE = 9_000_000_000_000;
+/** …and the button one above the line it annotates. */
+const Z_BUTTON = Z_LINE + 1;
 
 export function openingColor(opening: Opening): string {
   if (opening.kind === "window") {
@@ -71,7 +92,9 @@ function openingDash(opening: Opening): number[] {
 }
 
 interface OverlayEntry {
-  billboard: string;
+  /** null when this client gets no button for the opening — a player
+   *  looking at a window. */
+  billboard: string | null;
   path: string;
   layer: string;
 }
@@ -85,6 +108,8 @@ interface Visual {
   centre: Vector2;
   color: string;
   dash: number[];
+  /** Does this client get a clickable button for it? */
+  button: boolean;
 }
 
 export class OpeningOverlayActor extends Actor {
@@ -105,7 +130,9 @@ export class OpeningOverlayActor extends Actor {
   }
 
   delete(): void {
-    const ids = [...this.entries.values()].flatMap((e) => [e.billboard, e.path]);
+    const ids = [...this.entries.values()].flatMap((e) =>
+      e.billboard ? [e.billboard, e.path] : [e.path],
+    );
     if (ids.length > 0) this.reconciler.patcher.deleteItems(...ids);
     this.entries.clear();
     this.signature = "";
@@ -161,6 +188,10 @@ export class OpeningOverlayActor extends Actor {
         centre: transformPoint(matrix, centreLocal),
         color: openingColor(opening),
         dash: openingDash(opening),
+        // Players see a window's line but get no button for it: a
+        // window is see-through shut or open, so the toggle would be a
+        // control with no observable effect. See playerOperable.
+        button: gm || playerOperable(opening),
       });
     }
 
@@ -169,7 +200,11 @@ export class OpeningOverlayActor extends Actor {
     const wanted = new Set(visuals.map((v) => v.opening.id));
     for (const [id, entry] of [...this.entries]) {
       if (!wanted.has(id) || entry.layer !== layer) {
-        this.reconciler.patcher.deleteItems(entry.billboard, entry.path);
+        this.reconciler.patcher.deleteItems(
+          ...[entry.billboard, entry.path].filter(
+            (v): v is string => v !== null,
+          ),
+        );
         this.entries.delete(id);
       }
     }
@@ -190,21 +225,22 @@ export class OpeningOverlayActor extends Actor {
     entry: OverlayEntry,
     strokeWidth: number,
   ) {
+    this.reconciler.patcher.updateItems([
+      entry.path,
+      (item) => {
+        item.position = parent.position;
+        item.rotation = parent.rotation;
+        item.scale = parent.scale;
+        if (isPath(item)) {
+          item.commands = visual.commands;
+          item.style.strokeColor = visual.color;
+          item.style.strokeWidth = strokeWidth;
+          item.style.strokeDash = visual.dash;
+        }
+      },
+    ]);
+    if (!entry.billboard) return;
     this.reconciler.patcher.updateItems(
-      [
-        entry.path,
-        (item) => {
-          item.position = parent.position;
-          item.rotation = parent.rotation;
-          item.scale = parent.scale;
-          if (isPath(item)) {
-            item.commands = visual.commands;
-            item.style.strokeColor = visual.color;
-            item.style.strokeWidth = strokeWidth;
-            item.style.strokeDash = visual.dash;
-          }
-        },
-      ],
       [
         entry.billboard,
         (item) => {
@@ -241,7 +277,23 @@ export class OpeningOverlayActor extends Actor {
       .disableAttachmentBehavior(["VISIBLE", "COPY"])
       .metadata({ [OVERLAY_OPENING_KEY]: visual.opening.id })
       .locked(true)
+      // The button is the only thing you can click. On a thick fog
+      // stroke the line is by far the bigger target and would otherwise
+      // swallow every click meant for the button under it.
+      .disableHit(true)
+      .disableAutoZIndex(true)
+      .zIndex(Z_LINE)
       .build();
+
+    if (!visual.button) {
+      this.entries.set(visual.opening.id, {
+        billboard: null,
+        path: path.id,
+        layer,
+      });
+      this.reconciler.patcher.addItems(path);
+      return;
+    }
 
     const billboard = buildBillboard(
       openingImage(visual.opening.kind, visual.opening.open),
@@ -254,6 +306,8 @@ export class OpeningOverlayActor extends Actor {
       .metadata({ [OVERLAY_OPENING_KEY]: visual.opening.id })
       .maxViewScale(2)
       .locked(true)
+      .disableAutoZIndex(true)
+      .zIndex(Z_BUTTON)
       .build();
 
     this.entries.set(visual.opening.id, {

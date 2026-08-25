@@ -26,6 +26,7 @@ import { readOpenings } from "./opening/read";
 import { WallIndex } from "./light/wallIndex";
 import {
   blocksVision,
+  playerOperable,
   playerVisible,
   type Opening,
   type OpeningKind,
@@ -450,25 +451,43 @@ export function runDynfogSelfTest(): TestResult[] {
     // The three predicates that encode the whole table in
     // opening/types.ts, asserted directly so a future refactor of the
     // geometry can't quietly change the rules.
-    const cases: Array<[OpeningKind, boolean, boolean, boolean]> = [
-      // kind, open, expected blocksVision, expected playerVisible
-      ["door", false, true, true],
-      ["door", true, false, true],
-      ["secret", false, true, false],
-      ["secret", true, false, false],
-      ["window", false, false, true],
-      ["window", true, false, true],
+    const cases: Array<[OpeningKind, boolean, boolean, boolean, boolean]> = [
+      // kind, open, blocksVision, playerVisible, playerOperable
+      //
+      // The last column is the one worth staring at: a player SEES a
+      // window but cannot work it, because a window is see-through in
+      // both states and the toggle would do nothing they could observe.
+      ["door", false, true, true, true],
+      ["door", true, false, true, true],
+      ["secret", false, true, false, false],
+      ["secret", true, false, false, false],
+      ["window", false, false, true, false],
+      ["window", true, false, true, false],
     ];
     let ok = true;
     let detail = "";
-    for (const [kind, open, wantBlock, wantVisible] of cases) {
+    for (const [kind, open, wantBlock, wantVisible, wantOperable] of cases) {
       const o = door({ kind, open });
-      if (blocksVision(o) !== wantBlock || playerVisible(o) !== wantVisible) {
+      if (
+        blocksVision(o) !== wantBlock ||
+        playerVisible(o) !== wantVisible ||
+        playerOperable(o) !== wantOperable
+      ) {
         ok = false;
         detail += ` ${kind}/${open}`;
       }
     }
     check("opening semantics table holds", ok, detail);
+
+    // Nothing a player can operate may be invisible to them, or they
+    // would be clicking a button that isn't there.
+    const consistent = cases.every(
+      ([kind, open]) => {
+        const o = door({ kind, open });
+        return !playerOperable(o) || playerVisible(o);
+      },
+    );
+    check("player-operable implies player-visible", consistent);
   }
 
   {

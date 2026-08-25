@@ -13,7 +13,7 @@ import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import { OPENINGS_KEY } from "../ids";
 import { isDrawing, drawingToPolylines } from "../geom/drawing";
 import { UPSTREAM_DOORS_KEY, readOpenings, serialiseOpenings } from "./read";
-import { playerVisible, type Opening } from "./types";
+import { playerOperable, type Opening } from "./types";
 
 function currentOpenings(item: Item): Opening[] {
   // Upstream's shape stores ABSOLUTE arc length, so converting it needs
@@ -101,7 +101,9 @@ export async function applyPlayerOpeningState(
     let changed = false;
     const next = openings.map((o) => {
       if (o.id !== openingId) return o;
-      if (!playerVisible(o)) return o;
+      // playerOperable, not playerVisible: a player can SEE a window
+      // but must not be able to work its shutters.
+      if (!playerOperable(o)) return o;
       if (o.open === open) return o;
       changed = true;
       return { ...o, open };

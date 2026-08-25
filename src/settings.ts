@@ -3333,8 +3333,8 @@ const TABS: TabDef[] = [
             ${zh ? "玩家可开关门窗" : "Players Can Work Doors"}
             <div class="desc">${
               zh
-                ? "默认开启。仅 DM 可设。开启后玩家会看到门窗指示器，并在工具栏获得「开关门窗」工具，点一下就能开关；指示器画在迷雾<b>下方</b>，没探索到的区域不会提前泄露门的位置。关闭后玩家既看不到指示器也没有该工具，门窗只能由 DM 操作。<b>密门永远不受这个开关影响</b>，玩家在任何情况下都看不到、开不了。"
-                : "On by default. DM-only setting. When on, players see the door/window indicators and get a toolbar tool to flip them. Indicators render BELOW the fog, so undiscovered doors don't leak the floor plan. When off, players get neither the indicators nor the tool and only the DM can work the doors. <b>Secret doors ignore this switch entirely</b> — players never see or operate one under any setting."
+                ? "默认开启。仅 DM 可设。开启后玩家会看到门窗指示线，<b>门</b>还会带一个可点的按钮，配合工具栏的「开关门窗」工具一点就开关；指示器画在迷雾<b>下方</b>，没探索到的区域不会提前泄露门的位置。关闭后玩家既看不到指示器也没有该工具，门只能由 DM 操作。<br><b>窗户只有线、没有按钮</b>：窗户开着关着都能看穿，玩家去点它不会有任何可见变化，所以按钮只留给 DM。<b>密门永远不受这个开关影响</b>，玩家在任何情况下都看不到、开不了。"
+                : "On by default. DM-only setting. When on, players see the door and window indicator lines, and <b>doors</b> also get a clickable button that the toolbar's toggle tool works. Indicators render BELOW the fog, so undiscovered doors don't leak the floor plan. When off, players get neither the indicators nor the tool and only the DM can work the doors.<br><b>Windows get a line but no button</b>: a window is see-through whether it is shut or open, so a player clicking one would see nothing change — the shutters stay a DM control. <b>Secret doors ignore this switch entirely</b> — players never see or operate one under any setting."
             }</div>
           </div>
           <button class="tog ${

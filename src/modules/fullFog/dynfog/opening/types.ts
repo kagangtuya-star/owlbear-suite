@@ -66,9 +66,32 @@ export function cutsWall(opening: Opening): boolean {
   return !blocksVision(opening);
 }
 
-/** May a non-GM client see this opening's indicator and operate it? */
+/** May a non-GM client SEE this opening's indicator line at all?
+ *
+ *  A secret door is invisible to players by definition. Everything else
+ *  is drawn, so the party can tell a window from a door without having
+ *  to try it. */
 export function playerVisible(opening: Opening): boolean {
   return opening.kind !== "secret";
+}
+
+/**
+ * May a non-GM client OPERATE this opening — i.e. does it get a button?
+ *
+ * Narrower than `playerVisible`, and windows are the reason. A window
+ * is see-through in BOTH states (see the table at the top of this
+ * file), so a player flipping one changes nothing they can observe: the
+ * shutters are a GM's bookkeeping about what can be climbed through,
+ * not a light switch. Handing players a button that visibly does
+ * nothing is worse than handing them no button, so windows get an
+ * indicator line and no billboard.
+ *
+ * This is a real permission, not just a UI decision — `toggleChannel`
+ * and `applyPlayerOpeningState` both enforce it, so a hand-rolled
+ * broadcast cannot work a window or a secret door either.
+ */
+export function playerOperable(opening: Opening): boolean {
+  return playerVisible(opening) && opening.kind !== "window";
 }
 
 /** Default `open` for a freshly created opening of each kind.
